@@ -4,8 +4,10 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.YuvImage
 import android.media.Image
 import android.os.Bundle
 import android.widget.Toast
@@ -54,6 +56,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.opencv.core.Rect
+import android.graphics.Rect as Rect_andr
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -69,6 +73,7 @@ class MainActivity : ComponentActivity() {
     private var cameraSwitchInProgress by mutableStateOf(false)
     var showIrisResultDialog by mutableStateOf(false)
     var irisDetectionResult by mutableStateOf<String?>(null)
+
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -124,6 +129,7 @@ class MainActivity : ComponentActivity() {
         var recognizedUser by remember { mutableStateOf<String?>(null) }
         var previewSize by remember { mutableStateOf(Size(1f, 1f)) }
         var imageSize by remember { mutableStateOf(Size(1f, 1f)) }
+
 
         val cameraController = remember {
             LifecycleCameraController(context).apply {
@@ -319,13 +325,24 @@ class MainActivity : ComponentActivity() {
             @OptIn(ExperimentalGetImage::class)
             override fun analyze(image: ImageProxy) {
                 try {
-                    // Process only every 3rd frame to reduce load
                     if (frameCounter++ % 3 != 0) {
                         image.close()
                         return
                     }
 
-                    val bitmap = image.toBitmap()
+                    val rotationDegrees = image.imageInfo.rotationDegrees
+                    val rotationMatrix = Matrix().apply {
+                        when (rotationDegrees) {
+                            90 -> postRotate(90f)
+                            180 -> postRotate(180f)
+                            270 -> postRotate(270f)
+                        }
+                        if (isFrontCamera) {
+                            postScale(-1f, 1f) // Mirror for front camera
+                        }
+                    }
+
+                    val bitmap = image.toBitmap(rotationMatrix)
                     val mat = Mat()
                     Utils.bitmapToMat(bitmap, mat)
 
@@ -341,6 +358,56 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getRotationMatrix(rotationDegrees: Int): Matrix {
+        return Matrix().apply {
+            when (rotationDegrees) {
+                90 -> postRotate(90f)
+                180 -> postRotate(180f)
+                270 -> postRotate(270f)
+            }
+            if (isFrontCamera) {
+                postScale(-1f, 1f) // Flip horizontally for front camera
+            }
+        }
+    }
+
+    // Add this extension function
+    private fun ImageProxy.toBitmap(rotationMatrix: Matrix? = null): Bitmap {
+        val yBuffer = planes[0].buffer
+        val uBuffer = planes[1].buffer
+        val vBuffer = planes[2].buffer
+
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yBuffer.get(nv21, 0, ySize)
+        vBuffer.get(nv21, ySize, vSize)
+        uBuffer.get(nv21, ySize + vSize, uSize)
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, this.width, this.height, null)
+        val outputStream = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect_andr(0, 0, yuvImage.width, yuvImage.height), 100, outputStream)
+        val jpegArray = outputStream.toByteArray()
+        val bitmap = BitmapFactory.decodeByteArray(jpegArray, 0, jpegArray.size)
+
+        return if (rotationMatrix != null) {
+            Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.width,
+                bitmap.height,
+                rotationMatrix,
+                true
+            )
+        } else {
+            bitmap
+        }
+    }
+
+    // Update the getLatestFrame function
     private suspend fun getLatestFrame(cameraController: LifecycleCameraController): Bitmap? {
         return try {
             var capturedBitmap: Bitmap? = null
@@ -348,7 +415,17 @@ class MainActivity : ComponentActivity() {
 
             val analyzer = ImageAnalysis.Analyzer { imageProxy ->
                 try {
-                    capturedBitmap = imageProxy.toBitmap()
+                    val rotationMatrix = Matrix().apply {
+                        when (imageProxy.imageInfo.rotationDegrees) {
+                            90 -> postRotate(90f)
+                            180 -> postRotate(180f)
+                            270 -> postRotate(270f)
+                        }
+                        if (isFrontCamera) {
+                            postScale(-1f, 1f)
+                        }
+                    }
+                    capturedBitmap = imageProxy.toBitmap(rotationMatrix)
                 } finally {
                     imageProxy.close()
                     latch.countDown()
