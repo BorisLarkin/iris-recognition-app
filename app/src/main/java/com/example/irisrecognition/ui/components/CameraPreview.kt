@@ -107,11 +107,15 @@ fun CameraPreview(
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .size(100.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    .size(120.dp)
+                    .background(Color.Black.copy(alpha = 0.7f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = Color.White)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Scanning Iris", color = Color.White)
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.example.irisrecognition.ui
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -8,13 +9,17 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.YuvImage
-import android.media.Image
+import android.media.MediaScannerConnection
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
+import androidx.annotation.RequiresApi
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,37 +34,39 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
-import androidx.camera.view.PreviewView
 import com.example.irisrecognition.detection.FaceDetector
 import com.example.irisrecognition.detection.IrisDetector
 import com.example.irisrecognition.detection.models.Face
 import com.example.irisrecognition.detection.models.Iris
-import com.example.irisrecognition.detection.models.IrisData
 import com.example.irisrecognition.ui.components.CameraPreview
 import com.example.irisrecognition.ui.theme.IrisRecognitionTheme
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.Mat
 import timber.log.Timber
-import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.math.pow
 import androidx.compose.material3.Text
-import androidx.camera.core.ImageInfo
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.geometry.Size
+import com.example.irisrecognition.detection.models.IrisData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.opencv.core.Point
 import org.opencv.core.Rect
 import android.graphics.Rect as Rect_andr
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 class MainActivity : ComponentActivity() {
     private lateinit var faceDetector: FaceDetector
@@ -133,8 +140,16 @@ class MainActivity : ComponentActivity() {
 
         val cameraController = remember {
             LifecycleCameraController(context).apply {
-                // Add both IMAGE_ANALYSIS AND PREVIEW
-                setEnabledUseCases(CameraController.IMAGE_ANALYSIS or CameraController.VIDEO_CAPTURE)
+                setEnabledUseCases(
+                    CameraController.IMAGE_ANALYSIS or
+                            CameraController.VIDEO_CAPTURE
+                )
+                // Add this workaround for encoder issues
+                cameraSelector = if (isFrontCamera) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                }
             }
         }
 
@@ -153,47 +168,71 @@ class MainActivity : ComponentActivity() {
         // Separate suspending function for face processing
         suspend fun processDetectedFace(
             detectedFaces: List<Face>,
-            cameraController: LifecycleCameraController
+            cameraController: LifecycleCameraController,
+            imageSize: Size
         ) {
             detectedFaces.firstOrNull()?.let { face ->
                 val bitmap = withContext(Dispatchers.IO) {
                     getLatestFrame(cameraController)?.let { fullBitmap ->
-                        // Expand face rectangle to ensure we capture entire eye region
-                        val expandedRect = Rect(
-                            (face.rect.x - face.rect.width * 0.2).toInt().coerceAtLeast(0),
-                            (face.rect.y - face.rect.height * 0.1).toInt().coerceAtLeast(0),
-                            (face.rect.width * 1.4).toInt().coerceAtMost(fullBitmap.width),
-                            (face.rect.height * 1.2).toInt().coerceAtMost(fullBitmap.height)
+                        // Get accurate face position in bitmap coordinates
+                        val scaleX = fullBitmap.width / imageSize.width
+                        val scaleY = fullBitmap.height / imageSize.height
+
+                        val faceRect = Rect(
+                            (face.rect.x * scaleX).toInt(),
+                            (face.rect.y * scaleY).toInt(),
+                            (face.rect.width * scaleX).toInt(),
+                            (face.rect.height * scaleY).toInt()
                         )
-                        extractFaceBitmap(fullBitmap, expandedRect)
+
+                        // Create expanded ROI focusing on upper face region
+                        val eyeRegion = Rect(
+                            (faceRect.x - faceRect.width * 0.1).coerceAtLeast(0.0).toInt(),
+                            (faceRect.y + faceRect.height * 0.1).coerceAtLeast(0.0).toInt(),
+                            (faceRect.width * 1.2).coerceAtMost((fullBitmap.width - faceRect.x).toDouble())
+                                .toInt(),
+                            (faceRect.height * 0.4).coerceAtMost((fullBitmap.height - faceRect.y).toDouble())
+                                .toInt()
+                        )
+
+                        Bitmap.createBitmap(
+                            fullBitmap,
+                            eyeRegion.x,
+                            eyeRegion.y,
+                            eyeRegion.width,
+                            eyeRegion.height
+                        ).also { cropped ->
+                            // Apply rotation correction if needed
+                            if (isFrontCamera) {
+                                val matrix = Matrix().apply {
+                                    postScale(-1f, 1f) // Mirror for front camera
+                                }
+                                Bitmap.createBitmap(
+                                    cropped, 0, 0,
+                                    cropped.width, cropped.height,
+                                    matrix, true
+                                )?.let { rotated ->
+                                    cropped.recycle()
+                                    rotated
+                                } ?: cropped
+                            } else {
+                                cropped
+                            }
+                        }
                     }
                 }
 
                 bitmap?.let { faceBitmap ->
-                    // Ensure bitmap is large enough for iris detection
-                    val minSize = 128
-                    val resizedBitmap = if (faceBitmap.width < minSize || faceBitmap.height < minSize) {
-                        Bitmap.createScaledBitmap(
-                            faceBitmap,
-                            faceBitmap.width.coerceAtLeast(minSize),
-                            faceBitmap.height.coerceAtLeast(minSize),
-                            true
+                    irisDetector.detectIrisInImage(bitmap) { iris ->
+                        // Convert iris positions back to original image coordinates
+                        val adjustedIris = iris.copy(
+                            leftIris = iris.leftIris?.let { adjustIrisPosition(it, faceBitmap, imageSize) },
+                            rightIris = iris.rightIris?.let { adjustIrisPosition(it, faceBitmap, imageSize) }
                         )
-                    } else {
-                        faceBitmap
-                    }
-
-                    irisDetector.detectIris(resizedBitmap) { iris ->
-                        irisPairs = listOf(iris)
-                        if (iris.leftIris == null && iris.rightIris == null) {
-                            showIrisResultDialog = true
-                            irisDetectionResult = "Iris not detected - ensure eyes are visible"
-                        }
+                        irisPairs = listOf(adjustedIris)
                     }
                 }
-            } ?: run {
-                irisPairs = emptyList()
-            }
+            } ?: run { irisPairs = emptyList() }
         }
 
         LaunchedEffect(isFrontCamera) {
@@ -222,7 +261,10 @@ class MainActivity : ComponentActivity() {
 
                     // Launch a new coroutine for the face processing
                     launch {
-                        processDetectedFace(detectedFaces, cameraController)
+                        processDetectedFace(
+                            detectedFaces, cameraController,
+                            imageSize = imageSize
+                        )
                     }
                 }
             )
@@ -243,13 +285,16 @@ class MainActivity : ComponentActivity() {
                 } else {
                     showIrisResultDialog = true
                     irisDetectionResult = "Scanning iris..."
+
                     irisPairs.firstOrNull()?.let { iris ->
                         iris.leftIris?.let { irisData ->
+                            // Find best match in database
                             val bestMatch = irisDatabase.findBestMatch(irisData.features)
                             if (bestMatch != null) {
                                 recognizedUser = bestMatch
                                 irisDetectionResult = "User recognized: $bestMatch"
                             } else {
+                                // New user flow
                                 tempIrisFeatures = irisData.features
                                 showNameInputDialog = true
                                 irisDetectionResult = "New user detected"
@@ -279,11 +324,12 @@ class MainActivity : ComponentActivity() {
         }
 
         if (showNameInputDialog) {
+            var name by remember { mutableStateOf("") }
+
             AlertDialog(
                 onDismissRequest = { showNameInputDialog = false },
                 title = { Text("New User Detected") },
                 text = {
-                    var name by remember { mutableStateOf("") }
                     Column {
                         Text("Please enter your name:")
                         OutlinedTextField(
@@ -297,7 +343,13 @@ class MainActivity : ComponentActivity() {
                     Button(
                         onClick = {
                             tempIrisFeatures?.let { features ->
-                                irisDatabase.addUser(features, "Unknown User")
+                                if (name.isNotBlank()) {
+                                    irisDatabase.addUser(features, name)
+                                    recognizedUser = name
+                                } else {
+                                    irisDatabase.addUser(features, "Unknown User")
+                                    recognizedUser = "Unknown User"
+                                }
                             }
                             showNameInputDialog = false
                         }
@@ -317,6 +369,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private var frameCounter = 0
+
+    private fun adjustIrisPosition(irisData: IrisData, faceBitmap: Bitmap, imageSize: Size): IrisData {
+        // Calculate scale factors
+        val scaleX = imageSize.width / faceBitmap.width
+        val scaleY = imageSize.height / faceBitmap.height
+
+        return IrisData(
+            center = Point(
+                irisData.center.x * scaleX,
+                irisData.center.y * scaleY
+            ),
+            radius = irisData.radius * max(scaleX, scaleY),
+            features = irisData.features
+        )
+    }
 
     private fun createAnalyzer(
         onResult: (List<Face>, Size) -> Unit
@@ -357,17 +424,79 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private fun saveToGallery(bitmap: Bitmap, context: Context, title: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            saveToGalleryApi29Plus(bitmap, context, title)
+        } else {
+            saveToGalleryLegacy(bitmap, context, title)
+        }
+    }
 
-    private fun getRotationMatrix(rotationDegrees: Int): Matrix {
-        return Matrix().apply {
-            when (rotationDegrees) {
-                90 -> postRotate(90f)
-                180 -> postRotate(180f)
-                270 -> postRotate(270f)
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun saveToGalleryApi29Plus(bitmap: Bitmap, context: Context, title: String) {
+        try {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "iris_$title.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
+                put(MediaStore.Images.Media.IS_PENDING, 1)
             }
-            if (isFrontCamera) {
-                postScale(-1f, 1f) // Flip horizontally for front camera
+
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                ?: throw IOException("Failed to create MediaStore entry")
+
+            resolver.openOutputStream(uri).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream ?: throw IOException("Failed to get output stream"))
             }
+
+            contentValues.clear()
+            contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+
+        } catch (e: Exception) {
+            Timber.e(e, "API 29+ Gallery save failed")
+            // Fallback to legacy method
+            saveToGalleryLegacy(bitmap, context, title)
+        }
+    }
+
+    private fun saveToGalleryLegacy(bitmap: Bitmap, context: Context, title: String) {
+        try {
+            val imagesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            val appDir = File(imagesDir, "IrisRecognition")
+            if (!appDir.exists()) {
+                appDir.mkdirs()
+            }
+
+            val file = File(appDir, "iris_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { outputStream ->
+                if (bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)) {
+                    // Notify gallery
+                    MediaScannerConnection.scanFile(
+                        context,
+                        arrayOf(file.absolutePath),
+                        arrayOf("image/jpeg"),
+                        null
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Legacy gallery save failed")
+            // Final fallback to app-specific storage
+            saveToInternalStorage(bitmap, context, title)
+        }
+    }
+
+    private fun saveToInternalStorage(bitmap: Bitmap, context: Context, title: String) {
+        try {
+            val file = File(context.filesDir, "iris_$title.jpg")
+            FileOutputStream(file).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+            }
+            Timber.d("Image saved to internal storage: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Timber.e(e, "Internal storage save failed")
         }
     }
 

@@ -56,52 +56,56 @@ class FaceDetector(context: Context) {
     }
 
     fun detectFaces(image: Mat, callback: (List<Face>) -> Unit) {
-        if (faceCascade == null || eyeCascade == null) {
-            callback(emptyList())
-            return
-        }
-
         try {
             val grayImage = Mat()
             Imgproc.cvtColor(image, grayImage, Imgproc.COLOR_BGR2GRAY)
             Imgproc.equalizeHist(grayImage, grayImage)
 
+            // Increased minimum face size and adjusted parameters
             val faces = MatOfRect()
             faceCascade?.detectMultiScale(
-                grayImage, faces, FACE_DETECTION_SCALE.toDouble(), 3, 0,
-                Size(MIN_FACE_SIZE.toDouble(), MIN_FACE_SIZE.toDouble()),
-                Size(1000.0, 1000.0)
+                grayImage, faces, 1.05, 4, 0,
+                Size(150.0, 150.0), // Increased minimum face size
+                Size(800.0, 800.0)  // Reduced maximum face size
             )
 
             val faceResults = faces.toList().map { faceRect ->
-                // Expand face rectangle by 20% for better eye detection
-                val expandedFaceRect = Rect(
+                // Expand face rectangle by 20%
+                val expandedRect = Rect(
                     (faceRect.x - faceRect.width * 0.2).toInt().coerceAtLeast(0),
                     (faceRect.y - faceRect.height * 0.2).toInt().coerceAtLeast(0),
-                    (faceRect.width * 1.4).toInt().coerceAtMost(grayImage.cols()),
-                    (faceRect.height * 1.4).toInt().coerceAtMost(grayImage.rows())
+                    (faceRect.width * 1.4).toInt().coerceAtMost(grayImage.cols() - faceRect.x),
+                    (faceRect.height * 1.4).toInt().coerceAtMost(grayImage.rows() - faceRect.y)
                 )
 
-                val faceROI = grayImage.submat(expandedFaceRect)
+                // Detect eyes in upper 60% of face only
+                val eyeRegion = Rect(
+                    expandedRect.x,
+                    expandedRect.y + (expandedRect.height * 0.2).toInt(),
+                    expandedRect.width,
+                    (expandedRect.height * 0.6).toInt()
+                )
+
+                val faceROI = grayImage.submat(eyeRegion)
                 val eyes = MatOfRect()
                 eyeCascade?.detectMultiScale(
-                    faceROI, eyes, 1.1, 2, 0,
-                    Size(30.0, 30.0), Size()
+                    faceROI, eyes, 1.1, 3, 0,
+                    Size(30.0, 30.0), Size(100.0, 100.0)
                 )
 
                 val eyeLandmarks = eyes.toList().map { eyeRect ->
                     Point(
-                        expandedFaceRect.x + eyeRect.x + eyeRect.width * 0.5,
-                        expandedFaceRect.y + eyeRect.y + eyeRect.height * 0.5
+                        eyeRegion.x + eyeRect.x + eyeRect.width * 0.5,
+                        eyeRegion.y + eyeRect.y + eyeRect.height * 0.5
                     )
                 }
 
-                Face(expandedFaceRect, eyeLandmarks)
+                Face(expandedRect, eyeLandmarks)
             }
 
             callback(faceResults)
         } catch (e: Exception) {
-            Timber.e(e, "Error detecting faces")
+            Timber.e(e, "Face detection error")
             callback(emptyList())
         }
     }
