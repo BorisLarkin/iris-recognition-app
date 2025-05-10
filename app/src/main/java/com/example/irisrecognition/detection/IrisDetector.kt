@@ -56,59 +56,59 @@ class IrisDetector(context: Context) {
             val mat = Mat()
             Utils.bitmapToMat(image, mat)
 
-            // If we have an approximate region, focus there
-            val roi = approximateFaceRegion?.let { region ->
-                // Expand the region by 20% for safety
-                Rect(
-                    (region.x - region.width * 0.2).toInt().coerceAtLeast(0),
-                    (region.y - region.height * 0.1).toInt().coerceAtLeast(0),
-                    (region.width * 1.4).toInt().coerceAtMost(mat.cols() - region.x),
-                    (region.height * 1.2).toInt().coerceAtMost(mat.rows() - region.y)
-                )
-            } ?: Rect(0, 0, mat.cols(), mat.rows())
-
             // Work on grayscale image with enhanced contrast
             val gray = Mat()
-            Imgproc.cvtColor(mat.submat(roi), gray, Imgproc.COLOR_BGR2GRAY)
+            Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
             val clahe = Imgproc.createCLAHE(3.0, Size(8.0, 8.0))
             clahe.apply(gray, gray)
 
-            // Detect eyes first (if no face region provided)
-            val eyes = if (approximateFaceRegion == null) {
-                val eyesDetected = MatOfRect()
-                eyeCascade?.detectMultiScale(
-                    gray, eyesDetected, 1.1, 3, 0,
-                    Size(gray.cols() * 0.15, gray.rows() * 0.15),
-                    Size()
+            // If we have a face region, focus on the upper part (eyes area)
+            val roi = approximateFaceRegion?.let { faceRect ->
+                Rect(
+                    (faceRect.x + faceRect.width * 0.1).toInt().coerceAtLeast(0),
+                    (faceRect.y + faceRect.height * 0.2).toInt().coerceAtLeast(0),
+                    (faceRect.width * 0.8).toInt().coerceAtMost(gray.cols() - faceRect.x),
+                    (faceRect.height * 0.4).toInt().coerceAtMost(gray.rows() - faceRect.y)
                 )
-                eyesDetected.toList()
-            } else emptyList()
+            } ?: Rect(0, 0, gray.cols(), gray.rows())
 
-            // If we found eyes, use those regions, otherwise scan whole ROI
-            val irisResults = if (eyes.isNotEmpty()) {
-                eyes.map { eyeRect ->
-                    detectIrisInEyeRegion(gray.submat(eyeRect), eyeRect.x + roi.x, eyeRect.y + roi.y)
-                }
-            } else {
-                // Full image iris detection
-                detectIrisInRegion(gray, roi.x, roi.y)
+            // Detect irises in the region of interest
+            val circles = Mat()
+            Imgproc.HoughCircles(
+                gray.submat(roi), circles, Imgproc.HOUGH_GRADIENT,
+                1.5, // dp
+                roi.height / 4.0, // minDist
+                80.0, // param1
+                25.0, // param2
+                (roi.height * 0.1).toInt(), // minRadius
+                (roi.height * 0.3).toInt()  // maxRadius
+            )
+
+            // Process detected circles
+            val irisList = (0 until circles.cols()).mapNotNull { i ->
+                val circle = circles.get(0, i)
+                IrisData(
+                    Point(circle[0] + roi.x, circle[1] + roi.y),
+                    circle[2].toFloat(),
+                    extractIrisFeatures(gray.submat(roi), Point(circle[0], circle[1]), circle[2].toFloat())
+                )
             }
 
-            // Pair results (left is leftmost iris)
-            val pairedResult = when {
-                irisResults.size >= 2 -> {
-                    val sorted = irisResults.sortedBy { it.center.x }
+            // Pair irises (left is leftmost)
+            val result = when {
+                irisList.size >= 2 -> {
+                    val sorted = irisList.sortedBy { it.center.x }
                     Iris(leftIris = sorted[0], rightIris = sorted[1])
                 }
-                irisResults.size == 1 -> {
-                    Iris(leftIris = irisResults[0], rightIris = null)
+                irisList.size == 1 -> {
+                    Iris(leftIris = irisList[0], rightIris = null)
                 }
                 else -> Iris(null, null)
             }
 
-            callback(pairedResult)
+            callback(result)
         } catch (e: Exception) {
-            Timber.e(e, "Independent iris detection failed")
+            Timber.e(e, "Iris detection failed")
             callback(Iris(null, null))
         }
     }

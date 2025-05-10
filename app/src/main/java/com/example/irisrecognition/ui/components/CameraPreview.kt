@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.camera.view.PreviewView
@@ -76,7 +75,10 @@ fun CameraPreview(
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Button(
-                    onClick = onSwitchCamera,
+                    onClick = {
+                        // Directly trigger the camera flip without any additional logic
+                        onSwitchCamera()
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
