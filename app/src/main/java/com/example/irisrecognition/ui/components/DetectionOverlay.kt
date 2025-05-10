@@ -25,11 +25,25 @@ fun DetectionOverlay(
     imageHeight: Int
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
-        val scaleX = size.width / imageWidth.toFloat()
-        val scaleY = size.height / imageHeight.toFloat()
-        val scale = minOf(scaleX, scaleY)
-        val offsetX = (size.width - imageWidth * scale) / 2
-        val offsetY = (size.height - imageHeight * scale) / 2
+        // Calculate aspect ratios
+        val imageAspect = imageWidth.toFloat() / imageHeight.toFloat()
+        val previewAspect = size.width / size.height
+
+        val scale: Float
+        val offsetX: Float
+        val offsetY: Float
+
+        if (previewAspect > imageAspect) {
+            // Preview is wider than image (letterbox)
+            scale = size.height / imageHeight.toFloat()
+            offsetX = (size.width - imageWidth * scale) / 2
+            offsetY = 0f
+        } else {
+            // Preview is taller than image (pillarbox)
+            scale = size.width / imageWidth.toFloat()
+            offsetX = 0f
+            offsetY = (size.height - imageHeight * scale) / 2
+        }
 
         // Draw face rectangle
         faces.forEach { face ->
@@ -89,7 +103,8 @@ fun DetectionOverlay(
 private fun DrawScope.drawIrisMarker(
     center: Offset,
     radius: Float,
-    color: Color
+    color: Color,
+    showCrosshair: Boolean = false // Add this parameter
 ) {
     // Outer circle
     drawCircle(
@@ -106,17 +121,19 @@ private fun DrawScope.drawIrisMarker(
         radius = 6f
     )
 
-    // Crosshair
-    drawLine(
-        color = color,
-        start = Offset(center.x - radius, center.y),
-        end = Offset(center.x + radius, center.y),
-        strokeWidth = 2f
-    )
-    drawLine(
-        color = color,
-        start = Offset(center.x, center.y - radius),
-        end = Offset(center.x, center.y + radius),
-        strokeWidth = 2f
-    )
+    // Only draw crosshair if showCrosshair is true
+    if (showCrosshair) {
+        drawLine(
+            color = color,
+            start = Offset(center.x - radius, center.y),
+            end = Offset(center.x + radius, center.y),
+            strokeWidth = 2f
+        )
+        drawLine(
+            color = color,
+            start = Offset(center.x, center.y - radius),
+            end = Offset(center.x, center.y + radius),
+            strokeWidth = 2f
+        )
+    }
 }

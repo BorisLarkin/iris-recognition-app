@@ -65,7 +65,7 @@ fun CameraPreview(
             if (recognizedUser != null) {
                 RecognitionResult(user = recognizedUser)
             }
-
+            // Only show recognition result if we have a recognized user AND a face is detected
 
 
             Row(
@@ -103,6 +103,15 @@ fun CameraPreview(
                     Text("Scan")
                 }
             }
+        }
+
+        if (recognizedUser != null && faces.isNotEmpty()) {
+            RecognitionResult(
+                user = recognizedUser,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(16.dp)
+            )
         }
 
         if (isScanning) {

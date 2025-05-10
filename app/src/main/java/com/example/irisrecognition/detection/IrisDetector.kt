@@ -47,61 +47,57 @@ class IrisDetector(context: Context) {
         }
     }
 
-    fun detectIrisInImage(
-        image: Bitmap,
-        approximateFaceRegion: Rect? = null,
-        callback: (Iris) -> Unit
-    ) {
+    fun detectIris(image: Bitmap, callback: (Iris) -> Unit) {
         try {
             val mat = Mat()
             Utils.bitmapToMat(image, mat)
 
-            // Work on grayscale image with enhanced contrast
+            // Convert to grayscale with CLAHE
             val gray = Mat()
             Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-            val clahe = Imgproc.createCLAHE(3.0, Size(8.0, 8.0))
+            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(gray, gray)
 
-            // If we have a face region, focus on the upper part (eyes area)
-            val roi = approximateFaceRegion?.let { faceRect ->
-                Rect(
-                    (faceRect.x + faceRect.width * 0.1).toInt().coerceAtLeast(0),
-                    (faceRect.y + faceRect.height * 0.2).toInt().coerceAtLeast(0),
-                    (faceRect.width * 0.8).toInt().coerceAtMost(gray.cols() - faceRect.x),
-                    (faceRect.height * 0.4).toInt().coerceAtMost(gray.rows() - faceRect.y)
-                )
-            } ?: Rect(0, 0, gray.cols(), gray.rows())
+            // Blur to reduce noise
+            Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
 
-            // Detect irises in the region of interest
+            // Edge detection
+            val edges = Mat()
+            Imgproc.Canny(gray, edges, 50.0, 150.0)
+
+            // Hough Circles with optimized parameters
             val circles = Mat()
             Imgproc.HoughCircles(
-                gray.submat(roi), circles, Imgproc.HOUGH_GRADIENT,
-                1.5, // dp
-                roi.height / 4.0, // minDist
-                80.0, // param1
-                25.0, // param2
-                (roi.height * 0.1).toInt(), // minRadius
-                (roi.height * 0.3).toInt()  // maxRadius
+                edges, circles, Imgproc.HOUGH_GRADIENT,
+                1.2,  // dp
+                gray.rows() / 8.0,  // minDist
+                100.0,  // param1
+                30.0,   // param2
+                10,     // minRadius
+                50      // maxRadius
             )
 
-            // Process detected circles
-            val irisList = (0 until circles.cols()).mapNotNull { i ->
+            // Process results
+            val irises = mutableListOf<IrisData>()
+            for (i in 0 until circles.cols()) {
                 val circle = circles.get(0, i)
-                IrisData(
-                    Point(circle[0] + roi.x, circle[1] + roi.y),
-                    circle[2].toFloat(),
-                    extractIrisFeatures(gray.submat(roi), Point(circle[0], circle[1]), circle[2].toFloat())
-                )
+                val center = Point(circle[0], circle[1])
+                val radius = circle[2].toFloat()
+
+                // Only accept circles in upper half of image
+                if (center.y < image.height * 0.6) {
+                    irises.add(IrisData(center, radius, extractIrisFeatures(gray, center, radius)))
+                }
             }
 
             // Pair irises (left is leftmost)
             val result = when {
-                irisList.size >= 2 -> {
-                    val sorted = irisList.sortedBy { it.center.x }
+                irises.size >= 2 -> {
+                    val sorted = irises.sortedBy { it.center.x }
                     Iris(leftIris = sorted[0], rightIris = sorted[1])
                 }
-                irisList.size == 1 -> {
-                    Iris(leftIris = irisList[0], rightIris = null)
+                irises.size == 1 -> {
+                    Iris(leftIris = irises[0], rightIris = null)
                 }
                 else -> Iris(null, null)
             }
@@ -113,117 +109,27 @@ class IrisDetector(context: Context) {
         }
     }
 
-    private fun detectIrisInEyeRegion(eyeRegion: Mat, offsetX: Int, offsetY: Int): IrisData {
-        val circles = Mat()
-        Imgproc.HoughCircles(
-            eyeRegion, circles, Imgproc.HOUGH_GRADIENT,
-            1.5, // dp
-            eyeRegion.rows() / 4.0, // minDist (smaller for eye regions)
-            80.0, // param1
-            25.0, // param2
-            (eyeRegion.rows() * 0.2).toInt(), // minRadius
-            (eyeRegion.rows() * 0.4).toInt()  // maxRadius
-        )
+    private fun extractIrisFeatures(eyeROI: Mat, center: Point, radius: Float): FloatArray {
+        // More robust feature extraction using polar coordinates
+        val features = FloatArray(256)
+        val steps = 16 // angular steps
+        val rings = 8 // radial steps
 
-        return if (circles.cols() > 0) {
-            val circle = circles.get(0, 0)
-            val center = Point(
-                circle[0] + offsetX,
-                circle[1] + offsetY
-            )
-            val radius = circle[2].toFloat()
-            IrisData(center, radius, extractIrisFeatures(eyeRegion, center, radius))
-        } else {
-            // Fallback to center of eye region
-            val center = Point(
-                eyeRegion.cols() / 2.0 + offsetX,
-                eyeRegion.rows() / 2.0 + offsetY
-            )
-            val radius = (eyeRegion.rows() * 0.25).toFloat()
-            IrisData(center, radius, FloatArray(128)) // Empty features
-        }
-    }
+        for (r in 0 until rings) {
+            val currentRadius = radius * (r + 1) / rings
+            for (a in 0 until steps) {
+                val angle = 2 * Math.PI * a / steps
+                val x = center.x + currentRadius * cos(angle)
+                val y = center.y + currentRadius * sin(angle)
 
-    private fun detectIrisInRegion(region: Mat, offsetX: Int, offsetY: Int): List<IrisData> {
-        val circles = Mat()
-        Imgproc.HoughCircles(
-            region, circles, Imgproc.HOUGH_GRADIENT,
-            1.5, // dp
-            region.rows() / 8.0, // minDist
-            80.0, // param1
-            25.0, // param2
-            15,   // minRadius
-            45    // maxRadius
-        )
-
-        return (0 until circles.cols()).mapNotNull { i ->
-            val circle = circles.get(0, i)
-            val center = Point(
-                circle[0] + offsetX,
-                circle[1] + offsetY
-            )
-            val radius = circle[2].toFloat()
-
-            // Filter by position (should be in upper half of image)
-            if (center.y < region.rows() * 0.6) {
-                IrisData(center, radius, extractIrisFeatures(region, center, radius))
-            } else null
-        }
-    }
-
-    fun detectIris(image: Bitmap, callback: (Iris) -> Unit) {
-        try {
-            val mat = Mat()
-            Utils.bitmapToMat(image, mat)
-
-            // Convert to grayscale with CLAHE for better contrast
-            val gray = Mat()
-            Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-            clahe.apply(gray, gray)
-
-            // Detect circles with adjusted parameters
-            val circles = Mat()
-            Imgproc.HoughCircles(
-                gray, circles, Imgproc.HOUGH_GRADIENT,
-                1.5, // dp
-                gray.rows() / 8.0, // minDist
-                80.0, // param1 (reduced from 100)
-                25.0, // param2 (reduced from 30)
-                15,   // minRadius (increased)
-                45    // maxRadius (reduced)
-            )
-
-            // Process detected circles
-            val irisList = mutableListOf<IrisData>()
-            for (i in 0 until circles.cols()) {
-                val circle = circles.get(0, i)
-                val center = Point(circle[0], circle[1])
-                val radius = circle[2].toFloat()
-
-                // Filter by position (should be in upper half of image)
-                if (center.y < image.height / 2) {
-                    irisList.add(IrisData(center, radius, extractIrisFeatures(mat, center, radius)))
+                if (x >= 0 && x < eyeROI.cols() && y >= 0 && y < eyeROI.rows()) {
+                    val pixelValue = eyeROI.get(y.toInt(), x.toInt())[0].toFloat() / 255.0f
+                    features[r * steps + a] = pixelValue
                 }
             }
-
-            // Pair irises (left is the leftmost one)
-            val result = when {
-                irisList.size >= 2 -> {
-                    val sorted = irisList.sortedBy { it.center.x }
-                    Iris(leftIris = sorted[0], rightIris = sorted[1])
-                }
-                irisList.size == 1 -> {
-                    Iris(leftIris = irisList[0], rightIris = null)
-                }
-                else -> Iris(null, null)
-            }
-
-            callback(result)
-        } catch (e: Exception) {
-            Timber.e(e, "Iris detection error")
-            callback(Iris(null, null))
         }
+
+        return features
     }
 
     private fun createIrisData(eyeRect: Rect, grayImage: Mat): IrisData {
@@ -302,26 +208,6 @@ class IrisDetector(context: Context) {
         val features = FloatArray(8)
         for (i in 0 until 8) {
             features[i] = hist.get(i, 0)[0].toFloat()
-        }
-
-        return features
-    }
-
-    private fun extractIrisFeatures(eyeROI: Mat, center: Point, radius: Float): FloatArray {
-        // Simplified feature extraction
-        val features = FloatArray(128)
-
-        // Sample pixels around the iris
-        for (i in 0 until 64) {
-            val angle = 2 * Math.PI * i / 64
-            val x = center.x + radius * cos(angle)
-            val y = center.y + radius * sin(angle)
-
-            if (x >= 0 && x < eyeROI.cols() && y >= 0 && y < eyeROI.rows()) {
-                val pixelValue = eyeROI.get(y.toInt(), x.toInt())[0].toFloat() / 255.0f
-                features[i] = pixelValue
-                features[i + 64] = 1 - pixelValue // Complementary feature
-            }
         }
 
         return features
