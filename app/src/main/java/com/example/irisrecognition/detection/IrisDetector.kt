@@ -132,52 +132,22 @@ class IrisDetector(context: Context) {
         return features
     }
 
-    private fun createIrisData(eyeRect: Rect, grayImage: Mat): IrisData {
-        val eyeROI = grayImage.submat(eyeRect)
+    private fun saveToInternalStorage(bitmap: Bitmap, context: Context, title: String) {
+        try {
+            // Ensure directory exists
+            val directory = File(context.filesDir, "iris_images")
+            if (!directory.exists()) {
+                directory.mkdirs()
+            }
 
-        // Convert to color for iris color analysis
-        val colorEyeROI = Mat()
-        Imgproc.cvtColor(eyeROI, colorEyeROI, Imgproc.COLOR_GRAY2BGR)
-        val hsvEyeROI = Mat()
-        Imgproc.cvtColor(colorEyeROI, hsvEyeROI, Imgproc.COLOR_BGR2HSV)
-
-        // Detect iris circle
-        val circles = Mat()
-        Imgproc.HoughCircles(
-            eyeROI, circles, Imgproc.HOUGH_GRADIENT,
-            1.5, // dp
-            eyeROI.rows() / 8.0, // minDist
-            100.0, // param1
-            30.0, // param2
-            (eyeRect.width * 0.2).toInt(), // minRadius
-            (eyeRect.width * 0.4).toInt() // maxRadius
-        )
-
-        return if (circles.cols() > 0) {
-            val circle = circles.get(0, 0)
-            val center = Point(
-                eyeRect.x + circle[0],
-                eyeRect.y + circle[1]
-            )
-            val radius = circle[2].toFloat()
-
-            // Extract color histogram features
-            val features = extractIrisColorFeatures(hsvEyeROI, center, radius)
-
-            IrisData(center, radius, features)
-        } else {
-            // Fallback with estimated iris position
-            val center = Point(
-                eyeRect.x + eyeRect.width * 0.5,
-                eyeRect.y + eyeRect.height * 0.5
-            )
-            val radius = (eyeRect.width * 0.3).toFloat()
-
-            IrisData(
-                center,
-                radius,
-                extractIrisColorFeatures(hsvEyeROI, center, radius)
-            )
+            val file = File(directory, "${title}_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                outputStream.flush()
+            }
+            Timber.d("Image saved to: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to save image")
         }
     }
 

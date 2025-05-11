@@ -62,9 +62,9 @@ fun CameraPreview(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 32.dp)
         ) {
-            if (recognizedUser != null) {
-                RecognitionResult(user = recognizedUser)
-            }
+            //if (recognizedUser != null) {
+            //    RecognitionResult(user = recognizedUser)
+            //}
             // Only show recognition result if we have a recognized user AND a face is detected
 
 

@@ -2,7 +2,6 @@ package com.example.irisrecognition.ui
 
 import IrisDatabase
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -41,7 +40,6 @@ import org.opencv.android.Utils
 import org.opencv.core.Mat
 import timber.log.Timber
 import java.util.concurrent.Executors
-import kotlin.math.pow
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -54,28 +52,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.dp
-import com.example.irisrecognition.detection.models.IrisData
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.opencv.core.Point
-import org.opencv.core.Rect
 import android.graphics.Rect as Rect_andr
 import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.math.max
-import kotlin.math.min
-
-private data class FaceDetectionResult(
-    val faceBitmap: Bitmap,
-    val scaleX: Float,
-    val scaleY: Float,
-    val eyeRegion: Rect
-)
 
 class MainActivity : ComponentActivity() {
     private lateinit var faceDetector: FaceDetector
@@ -87,8 +71,8 @@ class MainActivity : ComponentActivity() {
     private var showNameInputDialog by mutableStateOf(false)
     private var tempIrisFeatures: FloatArray? = null
     private var cameraSwitchInProgress by mutableStateOf(false)
-    var showIrisResultDialog by mutableStateOf(false)
-    var irisDetectionResult by mutableStateOf<String?>(null)
+    private var showIrisResultDialog by mutableStateOf(false)
+    private var irisDetectionResult by mutableStateOf<String?>(null)
     private var isProcessingFrame by mutableStateOf(false)
     private var lastProcessedBitmap by mutableStateOf<Bitmap?>(null)
 
@@ -173,101 +157,33 @@ class MainActivity : ComponentActivity() {
         // Update preview size when camera is initialized
         LaunchedEffect(cameraController) {
             withContext(Dispatchers.Main) {
-                val cameraInfo = cameraController.cameraInfo
                 previewSize = Size(
-                    previewSize.width.toFloat(),
-                    previewSize.height.toFloat()
+                    previewSize.width,
+                    previewSize.height
                 )
             }
             cameraController.bindToLifecycle(lifecycleOwner)
         }
 
-        suspend fun processFrameForIrisDetection(frame: Bitmap) {
+        suspend fun processFrameForIrisDetection() {
             withContext(Dispatchers.IO) {
                 try {
-                    val mat = Mat()
-                    Utils.bitmapToMat(frame, mat)
-
-                    // Get the first face (we'll use its position to focus iris detection)
-                    faces.firstOrNull()?.let { face ->
-                        // Convert face rect to bitmap coordinates
-                        val scaleX = frame.width / imageSize.width
-                        val scaleY = frame.height / imageSize.height
-
-                        val faceRect = Rect(
-                            (face.rect.x * scaleX).toInt().coerceAtLeast(0),
-                            (face.rect.y * scaleY).toInt().coerceAtLeast(0),
-                            (face.rect.width * scaleX).toInt().coerceAtMost(frame.width),
-                            (face.rect.height * scaleY).toInt().coerceAtMost(frame.height)
-                        )
-
-                        // Focus on upper face region (eyes area) with bounds checking
-                        val eyeRegionX = max(0, faceRect.x - faceRect.width / 4)
-                        val eyeRegionY = max(0, faceRect.y + faceRect.height / 4)
-                        val eyeRegionWidth = min(frame.width - eyeRegionX, faceRect.width * 3 / 2)
-                        val eyeRegionHeight = min(frame.height - eyeRegionY, faceRect.height / 2)
-
-                        // Verify the region is valid before cropping
-                        if (eyeRegionWidth > 0 && eyeRegionHeight > 0 &&
-                            eyeRegionX + eyeRegionWidth <= frame.width &&
-                            eyeRegionY + eyeRegionHeight <= frame.height) {
-
-                            // Crop and process the eye region
-                            val eyeBitmap = Bitmap.createBitmap(
-                                frame,
-                                eyeRegionX,
-                                eyeRegionY,
-                                eyeRegionWidth,
-                                eyeRegionHeight
-                            )
-
-                            irisDetector.detectIris(eyeBitmap) { iris ->
-                                // Adjust coordinates back to full image
-                                val adjustedIris = iris.copy(
-                                    leftIris = iris.leftIris?.let { irisData ->
-                                        IrisData(
-                                            Point(
-                                                irisData.center.x + eyeRegionX,
-                                                irisData.center.y + eyeRegionY
-                                            ),
-                                            irisData.radius,
-                                            irisData.features
-                                        )
-                                    },
-                                    rightIris = iris.rightIris?.let { irisData ->
-                                        IrisData(
-                                            Point(
-                                                irisData.center.x + eyeRegionX,
-                                                irisData.center.y + eyeRegionY
-                                            ),
-                                            irisData.radius,
-                                            irisData.features
-                                        )
-                                    }
-                                )
-
-                                irisPairs = listOf(adjustedIris)
-
-                                // Handle recognition
-                                adjustedIris.leftIris?.let { irisData ->
-                                    val matchResult = irisDatabase.findBestMatch(irisData.features)
-                                    irisDetectionResult = if (matchResult.first != null && matchResult.second >= 0.8f) {
-                                        recognizedUser = matchResult.first
-                                        "User recognized: ${matchResult.first} (${(matchResult.second * 100).toInt()}%)"
-                                    } else {
-                                        tempIrisFeatures = irisData.features
-                                        showNameInputDialog = true
-                                        "New user detected"
-                                    }
-                                } ?: run {
-                                    irisDetectionResult = "Error: Iris not detected"
-                                }
+                    irisPairs.firstOrNull()?.let { iris ->
+                        iris.leftIris?.let { irisData ->
+                            val matchResult = irisDatabase.findBestMatch(irisData.features)
+                            irisDetectionResult = if (matchResult.first != null && matchResult.second >= 0.8f) {
+                                recognizedUser = matchResult.first
+                                "User recognized: ${matchResult.first} (${(matchResult.second * 100).toInt()}%)"
+                            } else {
+                                tempIrisFeatures = irisData.features
+                                showNameInputDialog = true
+                                "New user detected"
                             }
-                        } else {
-                            irisDetectionResult = "Error: Invalid eye region coordinates"
+                        } ?: run {
+                            irisDetectionResult = "Error: Iris not detected"
                         }
                     } ?: run {
-                        irisDetectionResult = "Error: Face position lost"
+                        irisDetectionResult = "Error: No Irises detected"
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "Error processing frame for iris detection")
@@ -276,8 +192,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+
         fun createAnalyzer(
-            onResult: (List<Face>, Size) -> Unit
+            onResult: (List<Face>, Size, List<Iris>) -> Unit
         ): ImageAnalysis.Analyzer {
             return object : ImageAnalysis.Analyzer {
                 @OptIn(ExperimentalGetImage::class)
@@ -296,7 +213,7 @@ class MainActivity : ComponentActivity() {
                                 270 -> postRotate(270f)
                             }
                             if (isFrontCamera) {
-                                postScale(-1f, 1f) // Mirror for front camera
+                                postScale(-1f, 1f)
                             }
                         }
 
@@ -304,8 +221,16 @@ class MainActivity : ComponentActivity() {
                         val mat = Mat()
                         Utils.bitmapToMat(bitmap, mat)
 
-                        faceDetector.detectFaces(mat) { faces ->
-                            onResult(faces, Size(image.width.toFloat(), image.height.toFloat()))
+                        // Detect faces first
+                        faceDetector.detectFaces(mat) { detectedFaces ->
+                            // Then detect irises in the full image
+                            irisDetector.detectIris(bitmap) { iris ->
+                                onResult(
+                                    detectedFaces,
+                                    Size(image.width.toFloat(), image.height.toFloat()),
+                                    listOf(iris)
+                                )
+                            }
                         }
                     } catch (e: Exception) {
                         Timber.e(e, "Error analyzing image")
@@ -314,109 +239,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-
-        // Separate suspending function for face processing
-        suspend fun processDetectedFace(
-            detectedFaces: List<Face>,
-            cameraController: LifecycleCameraController,
-            imageSize: Size
-        ) {
-            detectedFaces.firstOrNull()?.let { face ->
-                val detectionResult = withContext(Dispatchers.IO) {
-                    getLatestFrame(cameraController)?.let { fullBitmap ->
-                        // Calculate scaling factors
-                        val scaleX = fullBitmap.width / imageSize.width
-                        val scaleY = fullBitmap.height / imageSize.height
-
-                        // Calculate face rectangle in bitmap coordinates
-                        val faceRectInBitmap = Rect(
-                            (face.rect.x * scaleX).toInt(),
-                            (face.rect.y * scaleY).toInt(),
-                            (face.rect.width * scaleX).toInt(),
-                            (face.rect.height * scaleY).toInt()
-                        )
-
-                        // Create expanded ROI focusing on upper face region (eyes area)
-                        val eyeRegion = Rect(
-                            (faceRectInBitmap.x - faceRectInBitmap.width * 0.1).coerceAtLeast(0.0).toInt(),
-                            (faceRectInBitmap.y + faceRectInBitmap.height * 0.1).coerceAtLeast(0.0).toInt(),
-                            (faceRectInBitmap.width * 1.2).coerceAtMost((fullBitmap.width - faceRectInBitmap.x).toDouble())
-                                .toInt(),
-                            (faceRectInBitmap.height * 0.5).coerceAtMost((fullBitmap.height - faceRectInBitmap.y).toDouble())
-                                .toInt()
-                        )
-
-                        // Create face bitmap and return it with the scaling info
-                        FaceDetectionResult(
-                            faceBitmap = Bitmap.createBitmap(
-                                fullBitmap,
-                                eyeRegion.x,
-                                eyeRegion.y,
-                                eyeRegion.width,
-                                eyeRegion.height
-                            ).also { cropped ->
-                                if (isFrontCamera) {
-                                    val matrix = Matrix().apply {
-                                        postScale(-1f, 1f) // Mirror for front camera
-                                    }
-                                    Bitmap.createBitmap(
-                                        cropped, 0, 0,
-                                        cropped.width, cropped.height,
-                                        matrix, true
-                                    )?.let { rotated ->
-                                        cropped.recycle()
-                                        rotated
-                                    } ?: cropped
-                                } else {
-                                    cropped
-                                }
-                            },
-                            scaleX = scaleX,
-                            scaleY = scaleY,
-                            eyeRegion = eyeRegion
-                        )
-                    }
-                }
-
-                detectionResult?.let { result ->
-                    saveToInternalStorage(bitmap = result.faceBitmap, context, "face_roi")
-                    // Calculate the original face rectangle position relative to the cropped eye region
-                    val faceRectInCropped = Rect(
-                        (face.rect.x * result.scaleX - result.eyeRegion.x).toInt(),
-                        (face.rect.y * result.scaleY - result.eyeRegion.y).toInt(),
-                        (face.rect.width * result.scaleX).toInt(),
-                        (face.rect.height * result.scaleY).toInt()
-                    )
-
-                    irisDetector.detectIris(result.faceBitmap) { iris ->
-                        // Convert iris positions back to original image coordinates
-                        val adjustedIris = iris.copy(
-                            leftIris = iris.leftIris?.let { irisData ->
-                                IrisData(
-                                    Point(
-                                        irisData.center.x + result.eyeRegion.x,
-                                        irisData.center.y + result.eyeRegion.y
-                                    ),
-                                    irisData.radius,
-                                    irisData.features
-                                )
-                            },
-                            rightIris = iris.rightIris?.let { irisData ->
-                                IrisData(
-                                    Point(
-                                        irisData.center.x + result.eyeRegion.x,
-                                        irisData.center.y + result.eyeRegion.y
-                                    ),
-                                    irisData.radius,
-                                    irisData.features
-                                )
-                            }
-                        )
-                        irisPairs = listOf(adjustedIris)
-                    }
-                }
-            } ?: run { irisPairs = emptyList() }
         }
 
         LaunchedEffect(isFrontCamera) {
@@ -443,20 +265,18 @@ class MainActivity : ComponentActivity() {
 
         // Keep your existing analyzer setup in a separate LaunchedEffect
         LaunchedEffect(Unit) {
-            cameraController.setImageAnalysisAnalyzer(
-                executor,
-                createAnalyzer { detectedFaces, currentImageSize ->
-                    faces = detectedFaces
-                    imageSize = currentImageSize
-                    launch {
-                        processDetectedFace(
-                            detectedFaces, cameraController,
-                            imageSize = imageSize
-                        )
-                    }
-                }
-            )
+            val analyzer = createAnalyzer { detectedFaces, currentImageSize, irises ->
+                faces = detectedFaces
+                imageSize = currentImageSize
+                irisPairs = irises
+            }
+
+            cameraController.setImageAnalysisAnalyzer(executor, analyzer)
+
+            // Add this to handle camera controller lifecycle
+            awaitCancellation()
         }
+
 
         CameraPreview(
             cameraController = cameraController,
@@ -489,10 +309,19 @@ class MainActivity : ComponentActivity() {
 
                     coroutineScope.launch {
                         try {
+                            // Get fresh frame and process it
                             val frame = getLatestFrame(cameraController)
                             if (frame != null) {
                                 lastProcessedBitmap = frame
-                                processFrameForIrisDetection(frame)
+
+                                // Perform fresh iris detection on this frame
+                                irisDetector.detectIris(frame) { iris ->
+                                    irisPairs = listOf(iris)
+
+                                    launch {
+                                        processFrameForIrisDetection()
+                                    }
+                                }
                             } else {
                                 irisDetectionResult = "Error: Could not capture frame"
                             }
@@ -566,40 +395,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private var frameCounter = 0
-
-    private fun adjustIrisPosition(irisData: IrisData, faceBitmap: Bitmap, imageSize: Size): IrisData {
-        // Calculate scale factors
-        val scaleX = imageSize.width / faceBitmap.width
-        val scaleY = imageSize.height / faceBitmap.height
-
-        return IrisData(
-            center = Point(
-                irisData.center.x * scaleX,
-                irisData.center.y * scaleY
-            ),
-            radius = irisData.radius * max(scaleX, scaleY),
-            features = irisData.features
-        )
-    }
-
-    private fun saveToInternalStorage(bitmap: Bitmap, context: Context, title: String) {
-        try {
-            // Ensure directory exists
-            val directory = File(context.filesDir, "iris_images")
-            if (!directory.exists()) {
-                directory.mkdirs()
-            }
-
-            val file = File(directory, "${title}_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { outputStream ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-                outputStream.flush()
-            }
-            Timber.d("Image saved to: ${file.absolutePath}")
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to save image")
-        }
-    }
 
     // Add this extension function
     private fun ImageProxy.toBitmap(rotationMatrix: Matrix? = null): Bitmap {
@@ -687,22 +482,6 @@ class MainActivity : ComponentActivity() {
                 Timber.e(e, "Error capturing frame")
                 null
             }
-        }
-    }
-
-    private fun extractFaceBitmap(bitmap: Bitmap?, faceRect: Rect): Bitmap? {
-        if (bitmap == null) return null
-
-        val x = faceRect.x.coerceAtLeast(0)
-        val y = faceRect.y.coerceAtLeast(0)
-        val width = faceRect.width.coerceAtMost(bitmap.width - x)
-        val height = faceRect.height.coerceAtMost(bitmap.height - y)
-
-        return try {
-            Bitmap.createBitmap(bitmap, x, y, width, height)
-        } catch (e: Exception) {
-            Timber.e(e, "Error extracting face bitmap")
-            null
         }
     }
 

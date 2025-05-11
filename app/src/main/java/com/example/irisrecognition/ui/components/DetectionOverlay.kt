@@ -45,7 +45,6 @@ fun DetectionOverlay(
             offsetY = (size.height - imageHeight * scale) / 2
         }
 
-        // Draw face rectangle
         faces.forEach { face ->
             val faceLeft = face.rect.x * scale + offsetX
             val faceTop = face.rect.y * scale + offsetY
@@ -58,25 +57,12 @@ fun DetectionOverlay(
                 size = Size(faceWidth, faceHeight),
                 style = Stroke(width = 4f)
             )
-
-            // Draw eye landmarks
-            face.landmarks.forEachIndexed { index, point ->
-                val x = point.x * scale + offsetX
-                val y = point.y * scale + offsetY
-                val color = if (index == 0) Color.Red else Color.Blue
-
-                drawCircle(
-                    color = color.copy(alpha = 0.8f),
-                    center = Offset(x.toFloat(), y.toFloat()),
-                    radius = 12f
-                )
-            }
         }
 
-        // Draw iris markers
+        // Enhanced iris drawing
         irisPairs.forEach { iris ->
             iris.leftIris?.let { irisData ->
-                drawIrisMarker(
+                drawIrisCircle(
                     center = Offset(
                         (irisData.center.x * scale + offsetX).toFloat(),
                         (irisData.center.y * scale + offsetY).toFloat()
@@ -87,7 +73,7 @@ fun DetectionOverlay(
             }
 
             iris.rightIris?.let { irisData ->
-                drawIrisMarker(
+                drawIrisCircle(
                     center = Offset(
                         (irisData.center.x * scale + offsetX).toFloat(),
                         (irisData.center.y * scale + offsetY).toFloat()
@@ -100,40 +86,24 @@ fun DetectionOverlay(
     }
 }
 
-private fun DrawScope.drawIrisMarker(
+private fun DrawScope.drawIrisCircle(
     center: Offset,
     radius: Float,
-    color: Color,
-    showCrosshair: Boolean = false // Add this parameter
+    color: Color
 ) {
-    // Outer circle
+    // Outer circle (thicker)
     drawCircle(
-        color = color.copy(alpha = 0.3f),
+        color = color.copy(alpha = 0.5f),
         center = center,
         radius = radius,
-        style = Stroke(width = 3f)
+        style = Stroke(width = 4f)
     )
 
-    // Inner dot
+    // Center point
     drawCircle(
         color = color,
         center = center,
-        radius = 6f
+        radius = 8f
     )
-
-    // Only draw crosshair if showCrosshair is true
-    if (showCrosshair) {
-        drawLine(
-            color = color,
-            start = Offset(center.x - radius, center.y),
-            end = Offset(center.x + radius, center.y),
-            strokeWidth = 2f
-        )
-        drawLine(
-            color = color,
-            start = Offset(center.x, center.y - radius),
-            end = Offset(center.x, center.y + radius),
-            strokeWidth = 2f
-        )
-    }
 }
+

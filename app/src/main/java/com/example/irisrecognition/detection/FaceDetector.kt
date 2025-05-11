@@ -16,15 +16,11 @@ private const val MIN_FACE_SIZE = 100
 
 class FaceDetector(context: Context) {
     private var faceCascade: CascadeClassifier? = null
-    private var eyeCascade: CascadeClassifier? = null
 
     init {
         try {
             // Load face cascade
             faceCascade = loadCascadeClassifier(context, "haarcascade_frontalface_alt.xml")
-
-            // Load eye cascade
-            eyeCascade = loadCascadeClassifier(context, "haarcascade_eye.xml")
 
             Timber.d("FaceDetector initialized successfully")
         } catch (e: Exception) {
@@ -78,25 +74,10 @@ class FaceDetector(context: Context) {
                     (faceRect.height * 1.4).toInt().coerceAtMost(grayImage.rows() - faceRect.y)
                 )
 
-                // Detect eyes in upper 60% of face only
-                val eyeRegion = Rect(
-                    expandedRect.x,
-                    expandedRect.y + (expandedRect.height * 0.2).toInt(),
-                    expandedRect.width,
-                    (expandedRect.height * 0.6).toInt()
-                )
-
-                val faceROI = grayImage.submat(eyeRegion)
-                val eyes = MatOfRect()
-                eyeCascade?.detectMultiScale(
-                    faceROI, eyes, 1.1, 3, 0,
-                    Size(30.0, 30.0), Size(100.0, 100.0)
-                )
-
-                val eyeLandmarks = eyes.toList().map { eyeRect ->
+                val eyeLandmarks = faces.toList().map { eyeRect ->
                     Point(
-                        eyeRegion.x + eyeRect.x + eyeRect.width * 0.5,
-                        eyeRegion.y + eyeRect.y + eyeRect.height * 0.5
+                        expandedRect.x + eyeRect.x + eyeRect.width * 0.5,
+                        expandedRect.y + eyeRect.y + eyeRect.height * 0.5
                     )
                 }
 
@@ -112,6 +93,5 @@ class FaceDetector(context: Context) {
 
     fun close() {
         faceCascade = null
-        eyeCascade = null
     }
 }
