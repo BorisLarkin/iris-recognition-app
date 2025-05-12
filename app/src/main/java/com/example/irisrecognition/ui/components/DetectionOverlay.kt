@@ -22,7 +22,9 @@ fun DetectionOverlay(
     previewWidth: Float,
     previewHeight: Float,
     imageWidth: Int,
-    imageHeight: Int
+    imageHeight: Int,
+    rotationDegrees: Int = 0,
+    isFrontCamera: Boolean = false
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
         // Calculate aspect ratios
@@ -45,39 +47,59 @@ fun DetectionOverlay(
             offsetY = (size.height - imageHeight * scale) / 2
         }
 
+        // Function to transform coordinates based on rotation
+        fun transformPoint(x: Float, y: Float): Offset {
+            val rotated = when (rotationDegrees) {
+                90 -> Offset(y, imageHeight - x)
+                180 -> Offset(imageWidth - x, imageHeight - y)
+                270 -> Offset(imageWidth - y, x)
+                else -> Offset(x, y)
+            }
+
+            // Mirror for front camera
+            val mirrored = if (isFrontCamera) {
+                Offset(imageWidth - rotated.x, rotated.y)
+            } else {
+                rotated
+            }
+
+            return Offset(
+                mirrored.x * scale + offsetX,
+                mirrored.y * scale + offsetY
+            )
+        }
+
         faces.forEach { face ->
-            val faceLeft = face.rect.x * scale + offsetX
-            val faceTop = face.rect.y * scale + offsetY
-            val faceWidth = face.rect.width * scale
-            val faceHeight = face.rect.height * scale
+            val faceLeft = face.rect.x
+            val faceTop = face.rect.y
+            val faceRight = faceLeft + face.rect.width
+            val faceBottom = faceTop + face.rect.height
+
+            val topLeft = transformPoint(faceLeft.toFloat(), faceTop.toFloat())
+            val bottomRight = transformPoint(faceRight.toFloat(), faceBottom.toFloat())
 
             drawRect(
                 color = Color.Green.copy(alpha = 0.3f),
-                topLeft = Offset(faceLeft, faceTop),
-                size = Size(faceWidth, faceHeight),
+                topLeft = topLeft,
+                size = Size(bottomRight.x - topLeft.x, bottomRight.y - topLeft.y),
                 style = Stroke(width = 4f)
             )
         }
 
-        // Enhanced iris drawing
         irisPairs.forEach { iris ->
             iris.leftIris?.let { irisData ->
+                val center = transformPoint(irisData.center.x.toFloat(), irisData.center.y.toFloat())
                 drawIrisCircle(
-                    center = Offset(
-                        (irisData.center.x * scale + offsetX).toFloat(),
-                        (irisData.center.y * scale + offsetY).toFloat()
-                    ),
+                    center = center,
                     radius = irisData.radius * scale,
                     color = Color.Red
                 )
             }
 
             iris.rightIris?.let { irisData ->
+                val center = transformPoint(irisData.center.x.toFloat(), irisData.center.y.toFloat())
                 drawIrisCircle(
-                    center = Offset(
-                        (irisData.center.x * scale + offsetX).toFloat(),
-                        (irisData.center.y * scale + offsetY).toFloat()
-                    ),
+                    center = center,
                     radius = irisData.radius * scale,
                     color = Color.Blue
                 )

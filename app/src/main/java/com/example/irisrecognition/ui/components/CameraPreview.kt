@@ -1,5 +1,7 @@
 package com.example.irisrecognition.ui.components
 
+import android.view.ViewGroup
+import androidx.camera.core.CameraSelector
 import androidx.camera.view.LifecycleCameraController
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -18,6 +20,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.geometry.Size
 import com.example.irisrecognition.detection.models.Face
 import com.example.irisrecognition.detection.models.Iris
@@ -33,20 +37,31 @@ fun CameraPreview(
     imageSize: Size,
     onSwitchCamera: () -> Unit,
     onCapture: () -> Unit,
-    modifier: Modifier = Modifier,
-    isScanning: Boolean
+    isScanning: Boolean,
+    currentRotation : Int
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
+            factory = { context ->
+                PreviewView(context).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
                     scaleType = PreviewView.ScaleType.FILL_CENTER
                     implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                    controller = cameraController
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            update = { previewView ->
+                previewView.controller = cameraController
+            }
         )
+
+        // Get current rotation from camera info
+        val rotation = remember(cameraController) {
+            derivedStateOf { cameraController.cameraInfo!!.sensorRotationDegrees }
+        }
 
         DetectionOverlay(
             faces = faces,
@@ -54,7 +69,9 @@ fun CameraPreview(
             previewWidth = previewSize.width,
             previewHeight = previewSize.height,
             imageWidth = imageSize.width.toInt(),
-            imageHeight = imageSize.height.toInt()
+            imageHeight = imageSize.height.toInt(),
+            rotationDegrees = currentRotation, // Pass the rotation
+            isFrontCamera = cameraController.cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA
         )
 
         Column(

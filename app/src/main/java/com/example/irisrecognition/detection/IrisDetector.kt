@@ -52,41 +52,55 @@ class IrisDetector(context: Context) {
             val mat = Mat()
             Utils.bitmapToMat(image, mat)
 
-            // Convert to grayscale with CLAHE
+            // Convert to grayscale for eye detection
             val gray = Mat()
             Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-            clahe.apply(gray, gray)
 
-            // Blur to reduce noise
-            Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
+            // Convert to HSV for color features
+            val hsv = Mat()
+            Imgproc.cvtColor(mat, hsv, Imgproc.COLOR_BGR2HSV)
 
-            // Edge detection
-            val edges = Mat()
-            Imgproc.Canny(gray, edges, 50.0, 150.0)
-
-            // Hough Circles with optimized parameters
-            val circles = Mat()
-            Imgproc.HoughCircles(
-                edges, circles, Imgproc.HOUGH_GRADIENT,
-                1.2,  // dp
-                gray.rows() / 8.0,  // minDist
-                100.0,  // param1
-                30.0,   // param2
-                10,     // minRadius
-                50      // maxRadius
+            // Detect eyes first using the cascade classifier
+            val eyes = MatOfRect()
+            eyeCascade?.detectMultiScale(
+                gray, eyes, 1.1, 3, 0,
+                Size(30.0, 30.0), Size(200.0, 200.0)
             )
 
-            // Process results
+            val eyeRects = eyes.toList()
             val irises = mutableListOf<IrisData>()
-            for (i in 0 until circles.cols()) {
-                val circle = circles.get(0, i)
-                val center = Point(circle[0], circle[1])
-                val radius = circle[2].toFloat()
 
-                // Only accept circles in upper half of image
-                if (center.y < image.height * 0.6) {
-                    irises.add(IrisData(center, radius, extractIrisFeatures(gray, center, radius)))
+            for (eyeRect in eyeRects) {
+                // Extract eye region
+                val eyeROI = gray.submat(eyeRect)
+                val eyeHSV = hsv.submat(eyeRect)
+
+                // Apply preprocessing
+                val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+                clahe.apply(eyeROI, eyeROI)
+                Imgproc.GaussianBlur(eyeROI, eyeROI, Size(5.0, 5.0), 0.0)
+
+                // Detect circles (irises)
+                val circles = Mat()
+                Imgproc.HoughCircles(
+                    eyeROI, circles, Imgproc.HOUGH_GRADIENT,
+                    1.2, eyeROI.rows() / 8.0, 100.0, 30.0, 10, 50
+                )
+
+                // Process detected circles
+                for (i in 0 until min(circles.cols(), 1)) { // Take only the most prominent circle per eye
+                    val circle = circles.get(0, i)
+                    val center = Point(circle[0] + eyeRect.x, circle[1] + eyeRect.y)
+                    val radius = circle[2].toFloat()
+
+                    // Extract both shape and color features
+                    val shapeFeatures = extractIrisFeatures(eyeROI, Point(circle[0], circle[1]), radius)
+                    val colorFeatures = extractIrisColorFeatures(eyeHSV, Point(circle[0], circle[1]), radius)
+
+                    // Combine features
+                    val combinedFeatures = shapeFeatures + colorFeatures
+
+                    irises.add(IrisData(center, radius, combinedFeatures))
                 }
             }
 
@@ -132,35 +146,16 @@ class IrisDetector(context: Context) {
         return features
     }
 
-    private fun saveToInternalStorage(bitmap: Bitmap, context: Context, title: String) {
-        try {
-            // Ensure directory exists
-            val directory = File(context.filesDir, "iris_images")
-            if (!directory.exists()) {
-                directory.mkdirs()
-            }
-
-            val file = File(directory, "${title}_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { outputStream ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-                outputStream.flush()
-            }
-            Timber.d("Image saved to: ${file.absolutePath}")
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to save image")
-        }
-    }
-
     private fun extractIrisColorFeatures(hsvImage: Mat, center: Point, radius: Float): FloatArray {
         // Create mask for iris region
         val mask = Mat.zeros(hsvImage.size(), CvType.CV_8UC1)
-        Imgproc.circle(mask, Point(center.x, center.y), radius.toInt(), Scalar(255.0), -1)
+        Imgproc.circle(mask, center, radius.toInt(), Scalar(255.0), -1)
 
-        // Calculate color histogram (Hue channel)
+        // Calculate color histogram for Hue and Saturation channels
         val hist = Mat()
-        val channels = MatOfInt(0) // Hue channel
-        val histSize = MatOfInt(8) // 8 bins for hue
-        val ranges = MatOfFloat(0f, 180f) // Hue range
+        val channels = MatOfInt(0, 1) // Hue and Saturation channels
+        val histSize = MatOfInt(8, 8) // 8 bins for each channel
+        val ranges = MatOfFloat(0f, 180f, 0f, 256f) // Hue (0-180) and Saturation (0-256) ranges
 
         Imgproc.calcHist(
             listOf(hsvImage),
@@ -171,13 +166,16 @@ class IrisDetector(context: Context) {
             ranges
         )
 
-        // Normalize histogram to get features
+        // Normalize histogram
         Core.normalize(hist, hist, 1.0, 0.0, Core.NORM_L1)
 
         // Convert to float array
-        val features = FloatArray(8)
-        for (i in 0 until 8) {
-            features[i] = hist.get(i, 0)[0].toFloat()
+        val features = FloatArray(64) // 8x8 = 64 features
+        var index = 0
+        for (h in 0 until 8) {
+            for (s in 0 until 8) {
+                features[index++] = hist.get(h, s)[0].toFloat()
+            }
         }
 
         return features

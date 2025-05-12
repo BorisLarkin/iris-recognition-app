@@ -147,6 +147,7 @@ class MainActivity : ComponentActivity() {
         var previewSize by remember { mutableStateOf(Size(1f, 1f)) }
         var imageSize by remember { mutableStateOf(Size(1f, 1f)) }
         var confidence by remember { mutableStateOf<Float?>(null) }
+        var currentRotation by remember{ mutableStateOf<Int?>(0) }
 
 
         val cameraController = remember {
@@ -190,61 +191,12 @@ class MainActivity : ComponentActivity() {
             faces = detectedFaces
 
             if (detectedFaces.isNotEmpty()) {
-                val face = detectedFaces.first()
-                val scaleX = bitmap.width / currentImageSize.width
-                val scaleY = bitmap.height / currentImageSize.height
-
-                val faceRect = Rect(
-                    (face.rect.x * scaleX).toInt().coerceAtLeast(0),
-                    (face.rect.y * scaleY).toInt().coerceAtLeast(0),
-                    (face.rect.width * scaleX).toInt().coerceAtMost(bitmap.width),
-                    (face.rect.height * scaleY).toInt().coerceAtMost(bitmap.height)
-                )
-
-                // Focus on eye region
-                val eyeRegionX = max(0, faceRect.x - faceRect.width / 4)
-                val eyeRegionY = max(0, faceRect.y + faceRect.height / 4)
-                val eyeRegionWidth = min(bitmap.width - eyeRegionX, faceRect.width * 3 / 2)
-                val eyeRegionHeight = min(bitmap.height - eyeRegionY, faceRect.height / 2)
-
-                if (eyeRegionWidth > 0 && eyeRegionHeight > 0) {
-                    val eyeBitmap = Bitmap.createBitmap(
-                        bitmap,
-                        eyeRegionX,
-                        eyeRegionY,
-                        eyeRegionWidth,
-                        eyeRegionHeight
-                    )
-
-                    // 2. Detect irises
-                    irisDetector.detectIris(eyeBitmap) { iris ->
-                        // Adjust coordinates
-                        val adjustedIris = iris.copy(
-                            leftIris = iris.leftIris?.let { irisData ->
-                                IrisData(
-                                    Point(
-                                        irisData.center.x + eyeRegionX,
-                                        irisData.center.y + eyeRegionY
-                                    ),
-                                    irisData.radius,
-                                    irisData.features
-                                )
-                            },
-                            rightIris = iris.rightIris?.let { irisData ->
-                                IrisData(
-                                    Point(
-                                        irisData.center.x + eyeRegionX,
-                                        irisData.center.y + eyeRegionY
-                                    ),
-                                    irisData.radius,
-                                    irisData.features
-                                )
-                            }
-                        )
-                        irisPairs = listOf(adjustedIris)
+                // 2. Detect irises
+                    irisDetector.detectIris(bitmap) { iris ->
+                        irisPairs = listOf(iris) // No need to adjust coordinates anymore
 
                         // 3. Perform recognition
-                        adjustedIris.leftIris?.let { irisData ->
+                        iris.leftIris?.let { irisData ->
                             val matchResult = irisDatabase.findBestMatch(irisData.features)
                             if (matchResult.first != null && matchResult.second >= 0.8f) {
                                 // Recognized existing user
@@ -253,15 +205,12 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 // New user detected
                                 tempIrisFeatures = irisData.features
-                                recognizedUser=null
-                                confidence=null
+                                recognizedUser = null
+                                confidence = null
                             }
+
                         }
                     }
-                } else {
-                    irisPairs = emptyList()
-                    recognizedUser = null
-                }
             } else {
                 irisPairs = emptyList()
                 recognizedUser = null
@@ -278,9 +227,10 @@ class MainActivity : ComponentActivity() {
                         return@withContext
                     }
 
-                    val rotationDegrees = image.imageInfo.rotationDegrees
+                    currentRotation = image.imageInfo.rotationDegrees
+
                     val rotationMatrix = Matrix().apply {
-                        when (rotationDegrees) {
+                        when (currentRotation) {
                             90 -> postRotate(90f)
                             180 -> postRotate(180f)
                             270 -> postRotate(270f)
@@ -359,7 +309,7 @@ class MainActivity : ComponentActivity() {
                 override fun analyze(image: ImageProxy) {
                     try {
                         val rotationMatrix = Matrix().apply {
-                            when (image.imageInfo.rotationDegrees) {
+                            when (currentRotation) {
                                 90 -> postRotate(90f)
                                 180 -> postRotate(180f)
                                 270 -> postRotate(270f)
@@ -431,60 +381,60 @@ class MainActivity : ComponentActivity() {
             awaitCancellation()
         }
 
-
         CameraPreview(
-            cameraController = cameraController,
-            faces = faces,
-            irisPairs = irisPairs,
-            recognizedUser = recognizedUser,
-            previewSize = previewSize,
-            imageSize = imageSize,
-            onSwitchCamera = {
-                isFrontCamera = !isFrontCamera
-                irisPairs = emptyList() // Clear previous iris detections
-                recognizedUser = null // Clear previous recognition
-                cameraController.cameraSelector = if (isFrontCamera) {
-                    CameraSelector.DEFAULT_FRONT_CAMERA
-                } else {
-                    CameraSelector.DEFAULT_BACK_CAMERA
-                }
-            },
-            onCapture = {
-                if (faces.isEmpty()) {
-                    showIrisResultDialog = true
-                    irisDetectionResult = "Error: No face detected"
-                } else if (isProcessingFrame) {
-                    showIrisResultDialog = true
-                    irisDetectionResult = "Already processing a frame"
-                } else {
-                    isProcessingFrame = true
-                    showIrisResultDialog = true
-                    irisDetectionResult = "Scanning iris..."
+                cameraController = cameraController,
+                faces = faces,
+                irisPairs = irisPairs,
+                recognizedUser = recognizedUser,
+                previewSize = previewSize,
+                imageSize = imageSize,
+                onSwitchCamera = {
+                    isFrontCamera = !isFrontCamera
+                    irisPairs = emptyList() // Clear previous iris detections
+                    recognizedUser = null // Clear previous recognition
+                    cameraController.cameraSelector = if (isFrontCamera) {
+                        CameraSelector.DEFAULT_FRONT_CAMERA
+                    } else {
+                        CameraSelector.DEFAULT_BACK_CAMERA
+                    }
+                },
+                onCapture = {
+                    if (faces.isEmpty()) {
+                        showIrisResultDialog = true
+                        irisDetectionResult = "Error: No face detected"
+                    } else if (isProcessingFrame) {
+                        showIrisResultDialog = true
+                        irisDetectionResult = "Already processing a frame"
+                    } else {
+                        isProcessingFrame = true
+                        showIrisResultDialog = true
+                        irisDetectionResult = "Scanning iris..."
 
-                    coroutineScope.launch {
-                        try {
-                            val frame = getLatestFrame(cameraController)
-                            if (frame != null) {
-                                lastProcessedBitmap = frame
-                                processFrameForIrisDetection(frame)
-                                irisDetectionResult = recognizedUser?.let {
-                                    "User recognized: $it"
-                                } ?: "New user detected"
-                                showNameInputDialog = recognizedUser?.let {
-                                    false
-                                } ?: true
-                            } else {
-                                irisDetectionResult = "Error: Could not capture frame"
+                        coroutineScope.launch {
+                            try {
+                                val frame = getLatestFrame(cameraController)
+                                if (frame != null) {
+                                    lastProcessedBitmap = frame
+                                    processFrameForIrisDetection(frame)
+                                    irisDetectionResult = recognizedUser?.let {
+                                        "User recognized: $it"
+                                    } ?: "New user detected"
+                                    showNameInputDialog = recognizedUser?.let {
+                                        false
+                                    } ?: true
+                                } else {
+                                    irisDetectionResult = "Error: Could not capture frame"
+                                }
+                            } catch (e: Exception) {
+                                irisDetectionResult = "Error: ${e.localizedMessage}"
+                            } finally {
+                                isProcessingFrame = false
                             }
-                        } catch (e: Exception) {
-                            irisDetectionResult = "Error: ${e.localizedMessage}"
-                        } finally {
-                            isProcessingFrame = false
                         }
                     }
-                }
-            },
-            isScanning = showIrisResultDialog && irisDetectionResult == "Scanning iris..."
+                },
+                isScanning = showIrisResultDialog && irisDetectionResult == "Scanning iris...",
+                currentRotation = 0
         )
 
         if (showIrisResultDialog) {
