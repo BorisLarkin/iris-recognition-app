@@ -56,6 +56,7 @@ dependencies {
     implementation(libs.material3)
     implementation(libs.ui.tooling.preview)
     implementation(libs.litert.metadata)
+    implementation(libs.androidx.room.runtime.android)
     debugImplementation(libs.ui.tooling)
 
     implementation(libs.mediapipe.tasks.vision)

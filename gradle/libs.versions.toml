@@ -19,6 +19,7 @@ uiToolingPreview = "1.5.4"
 litertMetadata = "1.2.0"
 facemesh = "0.10.0"
 litertApi = "1.2.0"
+roomRuntimeAndroid = "2.7.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -51,6 +52,7 @@ ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "uiTooli
 ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "uiToolingPreview" }
 litert-metadata = { group = "com.google.ai.edge.litert", name = "litert-metadata", version.ref = "litertMetadata" }
 litert-api = { group = "com.google.ai.edge.litert", name = "litert-api", version.ref = "litertApi" }
+androidx-room-runtime-android = { group = "androidx.room", name = "room-runtime-android", version.ref = "roomRuntimeAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

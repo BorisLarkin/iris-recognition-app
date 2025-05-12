@@ -51,15 +51,24 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import androidx.room.util.copy
+import com.example.irisrecognition.detection.models.IrisData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.opencv.core.Point
+import org.opencv.core.Rect
 import android.graphics.Rect as Rect_andr
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : ComponentActivity() {
     private lateinit var faceDetector: FaceDetector
@@ -137,6 +146,7 @@ class MainActivity : ComponentActivity() {
         var recognizedUser by remember { mutableStateOf<String?>(null) }
         var previewSize by remember { mutableStateOf(Size(1f, 1f)) }
         var imageSize by remember { mutableStateOf(Size(1f, 1f)) }
+        var confidence by remember { mutableStateOf<Float?>(null) }
 
 
         val cameraController = remember {
@@ -165,78 +175,138 @@ class MainActivity : ComponentActivity() {
             cameraController.bindToLifecycle(lifecycleOwner)
         }
 
-        suspend fun processFrameForIrisDetection() {
+        suspend fun FaceDetector.detectFacesSuspended(mat: Mat): List<Face> = suspendCoroutine { continuation ->
+            detectFaces(mat) { faces ->
+                continuation.resume(faces)
+            }
+        }
+
+        suspend fun processBitmapForIrisDetection(bitmap: Bitmap, currentImageSize: Size) {
+            val mat = Mat()
+            Utils.bitmapToMat(bitmap, mat)
+
+            // 1. Detect faces
+            val detectedFaces = faceDetector.detectFacesSuspended(mat)
+            faces = detectedFaces
+
+            if (detectedFaces.isNotEmpty()) {
+                val face = detectedFaces.first()
+                val scaleX = bitmap.width / currentImageSize.width
+                val scaleY = bitmap.height / currentImageSize.height
+
+                val faceRect = Rect(
+                    (face.rect.x * scaleX).toInt().coerceAtLeast(0),
+                    (face.rect.y * scaleY).toInt().coerceAtLeast(0),
+                    (face.rect.width * scaleX).toInt().coerceAtMost(bitmap.width),
+                    (face.rect.height * scaleY).toInt().coerceAtMost(bitmap.height)
+                )
+
+                // Focus on eye region
+                val eyeRegionX = max(0, faceRect.x - faceRect.width / 4)
+                val eyeRegionY = max(0, faceRect.y + faceRect.height / 4)
+                val eyeRegionWidth = min(bitmap.width - eyeRegionX, faceRect.width * 3 / 2)
+                val eyeRegionHeight = min(bitmap.height - eyeRegionY, faceRect.height / 2)
+
+                if (eyeRegionWidth > 0 && eyeRegionHeight > 0) {
+                    val eyeBitmap = Bitmap.createBitmap(
+                        bitmap,
+                        eyeRegionX,
+                        eyeRegionY,
+                        eyeRegionWidth,
+                        eyeRegionHeight
+                    )
+
+                    // 2. Detect irises
+                    irisDetector.detectIris(eyeBitmap) { iris ->
+                        // Adjust coordinates
+                        val adjustedIris = iris.copy(
+                            leftIris = iris.leftIris?.let { irisData ->
+                                IrisData(
+                                    Point(
+                                        irisData.center.x + eyeRegionX,
+                                        irisData.center.y + eyeRegionY
+                                    ),
+                                    irisData.radius,
+                                    irisData.features
+                                )
+                            },
+                            rightIris = iris.rightIris?.let { irisData ->
+                                IrisData(
+                                    Point(
+                                        irisData.center.x + eyeRegionX,
+                                        irisData.center.y + eyeRegionY
+                                    ),
+                                    irisData.radius,
+                                    irisData.features
+                                )
+                            }
+                        )
+                        irisPairs = listOf(adjustedIris)
+
+                        // 3. Perform recognition
+                        adjustedIris.leftIris?.let { irisData ->
+                            val matchResult = irisDatabase.findBestMatch(irisData.features)
+                            if (matchResult.first != null && matchResult.second >= 0.8f) {
+                                // Recognized existing user
+                                recognizedUser = matchResult.first
+                                confidence = matchResult.second
+                            } else {
+                                // New user detected
+                                tempIrisFeatures = irisData.features
+                                recognizedUser=null
+                                confidence=null
+                            }
+                        }
+                    }
+                } else {
+                    irisPairs = emptyList()
+                    recognizedUser = null
+                }
+            } else {
+                irisPairs = emptyList()
+                recognizedUser = null
+            }
+
+            imageSize = currentImageSize
+        }
+
+        suspend fun processFrameForIrisDetection(image: ImageProxy) {
             withContext(Dispatchers.IO) {
                 try {
-                    irisPairs.firstOrNull()?.let { iris ->
-                        iris.leftIris?.let { irisData ->
-                            val matchResult = irisDatabase.findBestMatch(irisData.features)
-                            irisDetectionResult = if (matchResult.first != null && matchResult.second >= 0.8f) {
-                                recognizedUser = matchResult.first
-                                "User recognized: ${matchResult.first} (${(matchResult.second * 100).toInt()}%)"
-                            } else {
-                                tempIrisFeatures = irisData.features
-                                showNameInputDialog = true
-                                "New user detected"
-                            }
-                        } ?: run {
-                            irisDetectionResult = "Error: Iris not detected"
-                        }
-                    } ?: run {
-                        irisDetectionResult = "Error: No Irises detected"
+                    if (frameCounter++ % 3 != 0) {
+                        image.close()
+                        return@withContext
                     }
+
+                    val rotationDegrees = image.imageInfo.rotationDegrees
+                    val rotationMatrix = Matrix().apply {
+                        when (rotationDegrees) {
+                            90 -> postRotate(90f)
+                            180 -> postRotate(180f)
+                            270 -> postRotate(270f)
+                        }
+                        if (isFrontCamera) {
+                            postScale(-1f, 1f)
+                        }
+                    }
+
+                    val bitmap = image.toBitmap(rotationMatrix)
+                    processBitmapForIrisDetection(bitmap, Size(image.width.toFloat(), image.height.toFloat()))
                 } catch (e: Exception) {
-                    Timber.e(e, "Error processing frame for iris detection")
-                    irisDetectionResult = "Error: ${e.localizedMessage}"
+                    Timber.e(e, "Error processing frame")
+                } finally {
+                    image.close()
                 }
             }
         }
 
-
-        fun createAnalyzer(
-            onResult: (List<Face>, Size, List<Iris>) -> Unit
-        ): ImageAnalysis.Analyzer {
-            return object : ImageAnalysis.Analyzer {
-                @OptIn(ExperimentalGetImage::class)
-                override fun analyze(image: ImageProxy) {
-                    try {
-                        if (frameCounter++ % 3 != 0) {
-                            image.close()
-                            return
-                        }
-
-                        val rotationDegrees = image.imageInfo.rotationDegrees
-                        val rotationMatrix = Matrix().apply {
-                            when (rotationDegrees) {
-                                90 -> postRotate(90f)
-                                180 -> postRotate(180f)
-                                270 -> postRotate(270f)
-                            }
-                            if (isFrontCamera) {
-                                postScale(-1f, 1f)
-                            }
-                        }
-
-                        val bitmap = image.toBitmap(rotationMatrix)
-                        val mat = Mat()
-                        Utils.bitmapToMat(bitmap, mat)
-
-                        // Detect faces first
-                        faceDetector.detectFaces(mat) { detectedFaces ->
-                            // Then detect irises in the full image
-                            irisDetector.detectIris(bitmap) { iris ->
-                                onResult(
-                                    detectedFaces,
-                                    Size(image.width.toFloat(), image.height.toFloat()),
-                                    listOf(iris)
-                                )
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Timber.e(e, "Error analyzing image")
-                    } finally {
-                        image.close()
-                    }
+        suspend fun processFrameForIrisDetection(bitmap: Bitmap) {
+            withContext(Dispatchers.IO) {
+                try {
+                    processBitmapForIrisDetection(bitmap, imageSize)
+                } catch (e: Exception) {
+                    Timber.e(e, "Error processing Bitmap frame")
+                    irisDetectionResult = "Error: ${e.localizedMessage}"
                 }
             }
         }
@@ -263,17 +333,101 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        fun createAnalyzer(
+            onFrame: suspend (ImageProxy) -> Unit
+        ): ImageAnalysis.Analyzer {
+            return object : ImageAnalysis.Analyzer {
+                @OptIn(ExperimentalGetImage::class)
+                override fun analyze(image: ImageProxy) {
+                    coroutineScope.launch {
+                        try {
+                            onFrame(image)
+                        } catch (e: Exception) {
+                            Timber.e(e, "Error in analyzer")
+                        }
+                    }
+                }
+            }
+        }
+
+        fun createSingleFrameAnalyzer(
+            latch: CountDownLatch,
+            onFrameCaptured: (Bitmap) -> Unit
+        ): ImageAnalysis.Analyzer {
+            return object : ImageAnalysis.Analyzer {
+                @OptIn(ExperimentalGetImage::class)
+                override fun analyze(image: ImageProxy) {
+                    try {
+                        val rotationMatrix = Matrix().apply {
+                            when (image.imageInfo.rotationDegrees) {
+                                90 -> postRotate(90f)
+                                180 -> postRotate(180f)
+                                270 -> postRotate(270f)
+                            }
+                            if (isFrontCamera) {
+                                postScale(-1f, 1f)
+                            }
+                        }
+                        val bitmap = image.toBitmap(rotationMatrix)
+                        onFrameCaptured(bitmap)
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error in single frame analyzer")
+                    } finally {
+                        image.close()
+                        latch.countDown()
+                    }
+                }
+            }
+        }
+
+        // Update the getLatestFrame function
+        suspend fun getLatestFrame(cameraController: LifecycleCameraController): Bitmap? {
+            return withContext(Dispatchers.IO) {
+                try {
+                    val latch = CountDownLatch(1)
+                    var capturedBitmap: Bitmap? = null
+
+                    // Create and set single frame analyzer
+                    val analyzer = createSingleFrameAnalyzer(latch) { bitmap ->
+                        capturedBitmap = bitmap
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        cameraController.setImageAnalysisAnalyzer(executor, analyzer)
+                    }
+
+                    // Wait for frame capture
+                    if (!latch.await(1, TimeUnit.SECONDS)) {
+                        Timber.w("Timeout waiting for frame capture")
+                        return@withContext null
+                    }
+
+                    // Restore the original analyzer
+                    val mainAnalyzer = createAnalyzer { image ->
+                        processFrameForIrisDetection(image)
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        cameraController.setImageAnalysisAnalyzer(executor, mainAnalyzer)
+                    }
+
+                    capturedBitmap
+                } catch (e: Exception) {
+                    Timber.e(e, "Error capturing frame")
+                    null
+                }
+            }
+        }
+
         // Keep your existing analyzer setup in a separate LaunchedEffect
         LaunchedEffect(Unit) {
-            val analyzer = createAnalyzer { detectedFaces, currentImageSize, irises ->
-                faces = detectedFaces
-                imageSize = currentImageSize
-                irisPairs = irises
+            val mainAnalyzer = createAnalyzer { image ->
+                processFrameForIrisDetection(image)
             }
 
-            cameraController.setImageAnalysisAnalyzer(executor, analyzer)
+            cameraController.setImageAnalysisAnalyzer(executor, mainAnalyzer)
 
-            // Add this to handle camera controller lifecycle
+            // Keep the effect alive
             awaitCancellation()
         }
 
@@ -309,19 +463,16 @@ class MainActivity : ComponentActivity() {
 
                     coroutineScope.launch {
                         try {
-                            // Get fresh frame and process it
                             val frame = getLatestFrame(cameraController)
                             if (frame != null) {
                                 lastProcessedBitmap = frame
-
-                                // Perform fresh iris detection on this frame
-                                irisDetector.detectIris(frame) { iris ->
-                                    irisPairs = listOf(iris)
-
-                                    launch {
-                                        processFrameForIrisDetection()
-                                    }
-                                }
+                                processFrameForIrisDetection(frame)
+                                irisDetectionResult = recognizedUser?.let {
+                                    "User recognized: $it"
+                                } ?: "New user detected"
+                                showNameInputDialog = recognizedUser?.let {
+                                    false
+                                } ?: true
                             } else {
                                 irisDetectionResult = "Error: Could not capture frame"
                             }
@@ -376,8 +527,8 @@ class MainActivity : ComponentActivity() {
                                     irisDatabase.addUser(features, "Unknown User")
                                     recognizedUser = "Unknown User"
                                 }
+                                showNameInputDialog = false
                             }
-                            showNameInputDialog = false
                         }
                     ) {
                         Text("Save")
@@ -385,7 +536,10 @@ class MainActivity : ComponentActivity() {
                 },
                 dismissButton = {
                     Button(
-                        onClick = { showNameInputDialog = false }
+                        onClick = {
+                            showNameInputDialog = false
+                            recognizedUser = null
+                        }
                     ) {
                         Text("Cancel")
                     }
@@ -429,59 +583,6 @@ class MainActivity : ComponentActivity() {
             )
         } else {
             bitmap
-        }
-    }
-
-    // Update the getLatestFrame function
-    private suspend fun getLatestFrame(cameraController: LifecycleCameraController): Bitmap? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val latch = CountDownLatch(1)
-                var capturedBitmap: Bitmap? = null
-
-                // Create a temporary analyzer to capture a single frame
-                val analyzer = ImageAnalysis.Analyzer { imageProxy ->
-                    try {
-                        val rotationMatrix = Matrix().apply {
-                            when (imageProxy.imageInfo.rotationDegrees) {
-                                90 -> postRotate(90f)
-                                180 -> postRotate(180f)
-                                270 -> postRotate(270f)
-                            }
-                            if (isFrontCamera) {
-                                postScale(-1f, 1f)
-                            }
-                        }
-                        capturedBitmap = imageProxy.toBitmap(rotationMatrix)
-                    } catch (e: Exception) {
-                        Timber.e(e, "Error converting image to bitmap")
-                    } finally {
-                        imageProxy.close()
-                        latch.countDown()
-                    }
-                }
-
-                // Set the analyzer on the main thread
-                withContext(Dispatchers.Main) {
-                    cameraController.setImageAnalysisAnalyzer(executor, analyzer)
-                }
-
-                // Wait for the frame to be captured (with timeout)
-                if (!latch.await(1, TimeUnit.SECONDS)) {
-                    Timber.w("Timeout waiting for frame capture")
-                    return@withContext null
-                }
-
-                // Clear the analyzer on the main thread
-                withContext(Dispatchers.Main) {
-                    cameraController.clearImageAnalysisAnalyzer()
-                }
-
-                capturedBitmap
-            } catch (e: Exception) {
-                Timber.e(e, "Error capturing frame")
-                null
-            }
         }
     }
 
