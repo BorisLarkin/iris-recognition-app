@@ -66,11 +66,8 @@ fun CameraPreview(
         DetectionOverlay(
             faces = faces,
             irisPairs = irisPairs,
-            previewWidth = previewSize.width,
-            previewHeight = previewSize.height,
             imageWidth = imageSize.width.toInt(),
             imageHeight = imageSize.height.toInt(),
-            rotationDegrees = currentRotation, // Pass the rotation
             isFrontCamera = cameraController.cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA
         )
 

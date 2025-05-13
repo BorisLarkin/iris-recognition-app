@@ -4,8 +4,8 @@ import kotlin.math.sqrt
 
 class IrisDatabase {
     private val database = mutableMapOf<String, Pair<FloatArray, FloatArray>>() // Stores both shape and color features separately
-    private val SHAPE_WEIGHT = 0.6f // Weight for shape features
-    private val COLOR_WEIGHT = 0.4f // Weight for color features
+    private val SHAPE_WEIGHT = 0.4f // Weight for shape features
+    private val COLOR_WEIGHT = 0.6f // Weight for color features
     private val MIN_CONFIDENCE = 0.8f // Minimum confidence to consider a match
 
     fun addUser(features: FloatArray, name: String) {

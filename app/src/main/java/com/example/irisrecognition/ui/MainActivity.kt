@@ -147,7 +147,7 @@ class MainActivity : ComponentActivity() {
         var previewSize by remember { mutableStateOf(Size(1f, 1f)) }
         var imageSize by remember { mutableStateOf(Size(1f, 1f)) }
         var confidence by remember { mutableStateOf<Float?>(null) }
-        var currentRotation by remember{ mutableStateOf<Int?>(0) }
+        var currentRotation by remember{ mutableIntStateOf(0) }
 
 
         val cameraController = remember {
@@ -240,7 +240,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    val bitmap = image.toBitmap(rotationMatrix)
+                    val bitmap = image.toBitmap(currentRotation, isFrontCamera)
                     processBitmapForIrisDetection(bitmap, Size(image.width.toFloat(), image.height.toFloat()))
                 } catch (e: Exception) {
                     Timber.e(e, "Error processing frame")
@@ -308,17 +308,7 @@ class MainActivity : ComponentActivity() {
                 @OptIn(ExperimentalGetImage::class)
                 override fun analyze(image: ImageProxy) {
                     try {
-                        val rotationMatrix = Matrix().apply {
-                            when (currentRotation) {
-                                90 -> postRotate(90f)
-                                180 -> postRotate(180f)
-                                270 -> postRotate(270f)
-                            }
-                            if (isFrontCamera) {
-                                postScale(-1f, 1f)
-                            }
-                        }
-                        val bitmap = image.toBitmap(rotationMatrix)
+                        val bitmap = image.toBitmap(currentRotation, isFrontCamera)
                         onFrameCaptured(bitmap)
                     } catch (e: Exception) {
                         Timber.e(e, "Error in single frame analyzer")
@@ -501,7 +491,7 @@ class MainActivity : ComponentActivity() {
     private var frameCounter = 0
 
     // Add this extension function
-    private fun ImageProxy.toBitmap(rotationMatrix: Matrix? = null): Bitmap {
+    private fun ImageProxy.toBitmap(rotationDegrees: Int, isFrontCamera: Boolean): Bitmap {
         val yBuffer = planes[0].buffer
         val uBuffer = planes[1].buffer
         val vBuffer = planes[2].buffer
@@ -521,19 +511,18 @@ class MainActivity : ComponentActivity() {
         val jpegArray = outputStream.toByteArray()
         val bitmap = BitmapFactory.decodeByteArray(jpegArray, 0, jpegArray.size)
 
-        return if (rotationMatrix != null) {
-            Bitmap.createBitmap(
-                bitmap,
-                0,
-                0,
-                bitmap.width,
-                bitmap.height,
-                rotationMatrix,
-                true
-            )
-        } else {
-            bitmap
+        val rotationMatrix = Matrix().apply {
+            // Correct rotation based on camera sensor orientation
+            when (rotationDegrees) {
+                90 -> postRotate(90f)
+                180 -> postRotate(180f)
+                270 -> postRotate(270f)
+            }
         }
+
+        return Bitmap.createBitmap(
+            bitmap, 0, 0, bitmap.width, bitmap.height, rotationMatrix, true
+        )
     }
 
     private fun initializeOpenCv() {

@@ -19,64 +19,49 @@ fun DetectionOverlay(
     faces: List<Face>,
     irisPairs: List<Iris>,
     modifier: Modifier = Modifier,
-    previewWidth: Float,
-    previewHeight: Float,
     imageWidth: Int,
     imageHeight: Int,
-    rotationDegrees: Int = 0,
     isFrontCamera: Boolean = false
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
-        // Calculate aspect ratios
+        // Calculate aspect ratio preserving scale
         val imageAspect = imageWidth.toFloat() / imageHeight.toFloat()
-        val previewAspect = size.width / size.height
+        val canvasAspect = size.width / size.height
 
         val scale: Float
         val offsetX: Float
         val offsetY: Float
 
-        if (previewAspect > imageAspect) {
-            // Preview is wider than image (letterbox)
+        if (canvasAspect > imageAspect) {
+            // Letterbox (wide canvas)
             scale = size.height / imageHeight.toFloat()
             offsetX = (size.width - imageWidth * scale) / 2
             offsetY = 0f
         } else {
-            // Preview is taller than image (pillarbox)
+            // Pillarbox (tall canvas)
             scale = size.width / imageWidth.toFloat()
             offsetX = 0f
             offsetY = (size.height - imageHeight * scale) / 2
         }
 
-        // Function to transform coordinates based on rotation
+        // Unified coordinate transform (no rotation needed)
         fun transformPoint(x: Float, y: Float): Offset {
-            val rotated = when (rotationDegrees) {
-                90 -> Offset(y, imageHeight - x)
-                180 -> Offset(imageWidth - x, imageHeight - y)
-                270 -> Offset(imageWidth - y, x)
-                else -> Offset(x, y)
-            }
-
-            // Mirror for front camera
-            val mirrored = if (isFrontCamera) {
-                Offset(imageWidth - rotated.x, rotated.y)
+            val screenX = x * scale + offsetX
+            val screenY = y * scale + offsetY
+            return if (isFrontCamera) {
+                Offset(size.width - screenX, screenY) // Mirror only X for front camera
             } else {
-                rotated
+                Offset(screenX, screenY)
             }
-
-            return Offset(
-                mirrored.x * scale + offsetX,
-                mirrored.y * scale + offsetY
-            )
         }
 
+        // Draw faces
         faces.forEach { face ->
-            val faceLeft = face.rect.x
-            val faceTop = face.rect.y
-            val faceRight = faceLeft + face.rect.width
-            val faceBottom = faceTop + face.rect.height
-
-            val topLeft = transformPoint(faceLeft.toFloat(), faceTop.toFloat())
-            val bottomRight = transformPoint(faceRight.toFloat(), faceBottom.toFloat())
+            val topLeft = transformPoint(face.rect.x.toFloat(), face.rect.y.toFloat())
+            val bottomRight = transformPoint(
+                (face.rect.x + face.rect.width).toFloat(),
+                (face.rect.y + face.rect.height).toFloat()
+            )
 
             drawRect(
                 color = Color.Green.copy(alpha = 0.3f),
@@ -86,23 +71,34 @@ fun DetectionOverlay(
             )
         }
 
+        // Draw irises
         irisPairs.forEach { iris ->
             iris.leftIris?.let { irisData ->
-                val center = transformPoint(irisData.center.x.toFloat(), irisData.center.y.toFloat())
-                drawIrisCircle(
-                    center = center,
-                    radius = irisData.radius * scale,
-                    color = Color.Red
-                )
+                val center = transformPoint(
+                    irisData.center.x.toFloat(),
+                    irisData.center.y.toFloat()
+                ).let { original ->
+                    // Manual adjustments
+                    original.copy(
+                        y = original.y - 20f,  // Move up by 15 pixels
+                        x = original.x + 30f   // Move left by 10 pixels
+                    )
+                }
+                drawIrisCircle(center, irisData.radius * scale, Color.Red)
             }
 
             iris.rightIris?.let { irisData ->
-                val center = transformPoint(irisData.center.x.toFloat(), irisData.center.y.toFloat())
-                drawIrisCircle(
-                    center = center,
-                    radius = irisData.radius * scale,
-                    color = Color.Blue
-                )
+                val center = transformPoint(
+                    irisData.center.x.toFloat(),
+                    irisData.center.y.toFloat()
+                ).let { original ->
+                    // Manual adjustments
+                    original.copy(
+                        y = original.y - 20f,  // Move up by 15 pixels
+                        x = original.x - 100f   // Move right by 10 pixels
+                    )
+                }
+                drawIrisCircle(center, irisData.radius * scale, Color.Blue)
             }
         }
     }

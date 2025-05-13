@@ -1,0 +1,4 @@
+/home/borizzler/Android/Sdk/cmake/3.22.1/bin/ninja \
+  -C \
+  /home/borizzler/git/IrisRecognition/opencv/.cxx/Debug/w6u581h2/armeabi-v7a \
+  opencv_jni_shared

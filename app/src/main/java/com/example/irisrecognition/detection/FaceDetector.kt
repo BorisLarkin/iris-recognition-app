@@ -2,6 +2,7 @@ package com.example.irisrecognition.detection
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.ui.geometry.Rect
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
@@ -66,22 +67,16 @@ class FaceDetector(context: Context) {
             )
 
             val faceResults = faces.toList().map { faceRect ->
-                // Expand face rectangle by 20%
-                val expandedRect = Rect(
-                    (faceRect.x - faceRect.width * 0.2).toInt().coerceAtLeast(0),
-                    (faceRect.y - faceRect.height * 0.2).toInt().coerceAtLeast(0),
-                    (faceRect.width * 1.4).toInt().coerceAtMost(grayImage.cols() - faceRect.x),
-                    (faceRect.height * 1.4).toInt().coerceAtMost(grayImage.rows() - faceRect.y)
+                // Return absolute coordinates (no normalization)
+                Face(
+                    org.opencv.core.Rect(
+                        (faceRect.x - faceRect.width * 0.2).toInt().coerceAtLeast(0),
+                        (faceRect.y - faceRect.height * 0.2).toInt().coerceAtLeast(0),
+                        (faceRect.width * 1.4).toInt().coerceAtMost(image.cols()),
+                        (faceRect.height * 1.4).toInt().coerceAtMost(image.rows())
+                    ),
+                    emptyList()
                 )
-
-                val eyeLandmarks = faces.toList().map { eyeRect ->
-                    Point(
-                        expandedRect.x + eyeRect.x + eyeRect.width * 0.5,
-                        expandedRect.y + eyeRect.y + eyeRect.height * 0.5
-                    )
-                }
-
-                Face(expandedRect, eyeLandmarks)
             }
 
             callback(faceResults)

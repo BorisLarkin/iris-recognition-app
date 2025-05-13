@@ -90,8 +90,11 @@ class IrisDetector(context: Context) {
                 // Process detected circles
                 for (i in 0 until min(circles.cols(), 1)) { // Take only the most prominent circle per eye
                     val circle = circles.get(0, i)
-                    val center = Point(circle[0] + eyeRect.x, circle[1] + eyeRect.y)
-                    val radius = circle[2].toFloat()
+                    // In IrisDetector.kt
+                    val center = Point(
+                        circle[0] + eyeRect.x, circle[1] + eyeRect.y
+                    )
+                    val radius = circle[2].toFloat() // Normalize radius too
 
                     // Extract both shape and color features
                     val shapeFeatures = extractIrisFeatures(eyeROI, Point(circle[0], circle[1]), radius)
