@@ -1,6 +1,7 @@
 package com.example.irisrecognition.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,68 +29,73 @@ fun RecognitionResult(
     confidence: Float? = null,
     modifier: Modifier = Modifier
 ) {
-    if (user != null) {
-        Card(
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
+    // Wrap the Card in a Box to center it
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        if (user != null) {
+            Card(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                )) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Verified",
+                                tint = Color.Green
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "User: $user",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                        }
+
+                        confidence?.let {
+                            Spacer(modifier = Modifier.padding(4.dp))
+                            Text(
+                                text = "Confidence: ${(confidence * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+        } else {
+            Card(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f)
+                )
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Verified",
-                        tint = Color.Green
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Not recognized",
+                        tint = Color.Red
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "User: $user",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold
-                        )
+                        text = "User not recognized",
+                        style = MaterialTheme.typography.titleMedium
                     )
                 }
-
-                confidence?.let {
-                    Spacer(modifier = Modifier.padding(4.dp))
-                    Text(
-                        text = "Confidence: ${(confidence * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        }
-    } else {
-        Card(
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f)
-            )
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Warning,
-                    contentDescription = "Not recognized",
-                    tint = Color.Red
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "User not recognized",
-                    style = MaterialTheme.typography.titleMedium
-                )
             }
         }
     }

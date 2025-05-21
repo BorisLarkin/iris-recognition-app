@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,8 +56,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.room.util.copy
 import com.example.irisrecognition.detection.models.IrisData
+import com.example.irisrecognition.ui.components.RecognitionResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.opencv.core.Point
@@ -69,21 +72,24 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlin.math.max
 import kotlin.math.min
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.LaunchedEffect
 
 class MainActivity : ComponentActivity() {
     private lateinit var faceDetector: FaceDetector
     private lateinit var irisDetector: IrisDetector
-    private val irisDatabase = IrisDatabase()
     private val executor = Executors.newSingleThreadExecutor()
     private var isOpenCvInitialized = false
     private var isFrontCamera = false
-    private var showNameInputDialog by mutableStateOf(false)
-    private var tempIrisFeatures: FloatArray? = null
     private var cameraSwitchInProgress by mutableStateOf(false)
     private var showIrisResultDialog by mutableStateOf(false)
     private var irisDetectionResult by mutableStateOf<String?>(null)
     private var isProcessingFrame by mutableStateOf(false)
     private var lastProcessedBitmap by mutableStateOf<Bitmap?>(null)
+    private lateinit var irisDatabase: IrisDatabase
 
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -103,7 +109,7 @@ class MainActivity : ComponentActivity() {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
         initializeOpenCv()
-
+        irisDatabase = IrisDatabase(this)
         setContent {
             IrisRecognitionTheme {
                 Surface(
@@ -148,6 +154,8 @@ class MainActivity : ComponentActivity() {
         var imageSize by remember { mutableStateOf(Size(1f, 1f)) }
         var confidence by remember { mutableStateOf<Float?>(null) }
         var currentRotation by remember{ mutableIntStateOf(0) }
+        var isResultVisible by remember { mutableStateOf(false) }
+
 
 
         val cameraController = remember {
@@ -176,50 +184,53 @@ class MainActivity : ComponentActivity() {
             cameraController.bindToLifecycle(lifecycleOwner)
         }
 
+        // Automatically hide after delay when showIrisResultDialog becomes true
+        LaunchedEffect(showIrisResultDialog) {
+            if (showIrisResultDialog) {
+                isResultVisible = true
+                delay(5000) // Show for 3 seconds before fading out
+                isResultVisible = false
+                showIrisResultDialog = false // Also reset the dialog flag
+            }
+        }
+
         suspend fun FaceDetector.detectFacesSuspended(mat: Mat): List<Face> = suspendCoroutine { continuation ->
             detectFaces(mat) { faces ->
                 continuation.resume(faces)
             }
         }
 
-        suspend fun processBitmapForIrisDetection(bitmap: Bitmap, currentImageSize: Size) {
+        suspend fun processBitmapForIrisDetection(bitmap: Bitmap, currentImageSize: Size, recognize : Boolean) {
             val mat = Mat()
             Utils.bitmapToMat(bitmap, mat)
 
-            // 1. Detect faces
             val detectedFaces = faceDetector.detectFacesSuspended(mat)
             faces = detectedFaces
 
             if (detectedFaces.isNotEmpty()) {
-                // 2. Detect irises
-                    irisDetector.detectIris(bitmap) { iris ->
-                        irisPairs = listOf(iris) // No need to adjust coordinates anymore
-
-                        // 3. Perform recognition
+                irisDetector.detectIris(bitmap) { iris ->
+                    irisPairs = listOf(iris)
+                    if (recognize){
                         iris.leftIris?.let { irisData ->
                             val matchResult = irisDatabase.findBestMatch(irisData.features)
-                            if (matchResult.first != null && matchResult.second >= 0.8f) {
-                                // Recognized existing user
-                                recognizedUser = matchResult.first
-                                confidence = matchResult.second
-                            } else {
-                                // New user detected
-                                tempIrisFeatures = irisData.features
-                                recognizedUser = null
-                                confidence = null
-                            }
-
+                            recognizedUser = matchResult.first
+                            confidence = matchResult.second
+                        } ?: run {
+                            recognizedUser = null
+                            confidence = null
                         }
                     }
+                }
             } else {
                 irisPairs = emptyList()
-                recognizedUser = null
+                if (recognize) {
+                    recognizedUser = null
+                }
             }
 
             imageSize = currentImageSize
         }
-
-        suspend fun processFrameForIrisDetection(image: ImageProxy) {
+        suspend fun processFrameForIrisDetection(image: ImageProxy, recognize : Boolean = false) {
             withContext(Dispatchers.IO) {
                 try {
                     if (frameCounter++ % 3 != 0) {
@@ -241,7 +252,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val bitmap = image.toBitmap(currentRotation, isFrontCamera)
-                    processBitmapForIrisDetection(bitmap, Size(image.width.toFloat(), image.height.toFloat()))
+                    processBitmapForIrisDetection(bitmap, Size(image.width.toFloat(), image.height.toFloat()), recognize)
                 } catch (e: Exception) {
                     Timber.e(e, "Error processing frame")
                 } finally {
@@ -250,10 +261,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        suspend fun processFrameForIrisDetection(bitmap: Bitmap) {
+        suspend fun processFrameForIrisDetection(bitmap: Bitmap, recognize : Boolean = false) {
             withContext(Dispatchers.IO) {
                 try {
-                    processBitmapForIrisDetection(bitmap, imageSize)
+                    processBitmapForIrisDetection(bitmap, imageSize, recognize)
                 } catch (e: Exception) {
                     Timber.e(e, "Error processing Bitmap frame")
                     irisDetectionResult = "Error: ${e.localizedMessage}"
@@ -405,13 +416,10 @@ class MainActivity : ComponentActivity() {
                                 val frame = getLatestFrame(cameraController)
                                 if (frame != null) {
                                     lastProcessedBitmap = frame
-                                    processFrameForIrisDetection(frame)
+                                    processFrameForIrisDetection(frame, recognize = true)
                                     irisDetectionResult = recognizedUser?.let {
                                         "User recognized: $it"
-                                    } ?: "New user detected"
-                                    showNameInputDialog = recognizedUser?.let {
-                                        false
-                                    } ?: true
+                                    } ?: "Not recognized"
                                 } else {
                                     irisDetectionResult = "Error: Could not capture frame"
                                 }
@@ -428,63 +436,20 @@ class MainActivity : ComponentActivity() {
         )
 
         if (showIrisResultDialog) {
-            AlertDialog(
-                onDismissRequest = { showIrisResultDialog = false },
-                title = { Text("Iris Detection") },
-                text = { Text(irisDetectionResult ?: "Unknown error") },
-                confirmButton = {
-                    Button(onClick = { showIrisResultDialog = false }) {
-                        Text("OK")
-                    }
-                }
-            )
-        }
+            // Wrap your RecognitionResult with AnimatedVisibility
+            AnimatedVisibility(
+                visible = isResultVisible,
+                enter = fadeIn(animationSpec = tween(durationMillis = 300)),
+                exit = fadeOut(animationSpec = tween(durationMillis = 500))
+            ) {
+                RecognitionResult(
+                    user = recognizedUser,
+                    confidence = confidence,
+                    modifier = Modifier
+                        .padding(16.dp)
+                )
+            }
 
-        if (showNameInputDialog) {
-            var name by remember { mutableStateOf("") }
-
-            AlertDialog(
-                onDismissRequest = { showNameInputDialog = false },
-                title = { Text("New User Detected") },
-                text = {
-                    Column {
-                        Text("Please enter your name:")
-                        OutlinedTextField(
-                            value = name,
-                            onValueChange = { name = it },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            tempIrisFeatures?.let { features ->
-                                if (name.isNotBlank()) {
-                                    irisDatabase.addUser(features, name)
-                                    recognizedUser = name
-                                } else {
-                                    irisDatabase.addUser(features, "Unknown User")
-                                    recognizedUser = "Unknown User"
-                                }
-                                showNameInputDialog = false
-                            }
-                        }
-                    ) {
-                        Text("Save")
-                    }
-                },
-                dismissButton = {
-                    Button(
-                        onClick = {
-                            showNameInputDialog = false
-                            recognizedUser = null
-                        }
-                    ) {
-                        Text("Cancel")
-                    }
-                }
-            )
         }
     }
 

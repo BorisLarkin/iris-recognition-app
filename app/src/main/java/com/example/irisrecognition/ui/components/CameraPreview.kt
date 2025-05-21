@@ -58,11 +58,6 @@ fun CameraPreview(
             }
         )
 
-        // Get current rotation from camera info
-        val rotation = remember(cameraController) {
-            derivedStateOf { cameraController.cameraInfo!!.sensorRotationDegrees }
-        }
-
         DetectionOverlay(
             faces = faces,
             irisPairs = irisPairs,
@@ -76,12 +71,6 @@ fun CameraPreview(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 32.dp)
         ) {
-            //if (recognizedUser != null) {
-            //    RecognitionResult(user = recognizedUser)
-            //}
-            // Only show recognition result if we have a recognized user AND a face is detected
-
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -119,15 +108,6 @@ fun CameraPreview(
             }
         }
 
-        if (recognizedUser != null && faces.isNotEmpty()) {
-            RecognitionResult(
-                user = recognizedUser,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(16.dp)
-            )
-        }
-
         if (isScanning) {
             Box(
                 modifier = Modifier
@@ -143,23 +123,5 @@ fun CameraPreview(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun RecognitionResult(user: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = "Verified",
-            tint = Color.Green
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(text = "User: $user")
     }
 }

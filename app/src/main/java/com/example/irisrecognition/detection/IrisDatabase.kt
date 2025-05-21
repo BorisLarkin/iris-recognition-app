@@ -1,40 +1,61 @@
-import org.opencv.core.Core.sqrt
+import android.content.Context
+import android.graphics.BitmapFactory
+import com.example.irisrecognition.detection.IrisDetector
+import com.example.irisrecognition.detection.models.StoredIris
+import timber.log.Timber
 import kotlin.math.pow
 import kotlin.math.sqrt
 
-class IrisDatabase {
-    private val database = mutableMapOf<String, Pair<FloatArray, FloatArray>>() // Stores both shape and color features separately
+class IrisDatabase(private val context: Context) {
+    private val storedIrises = mutableListOf<StoredIris>()
     private val SHAPE_WEIGHT = 0.4f // Weight for shape features
     private val COLOR_WEIGHT = 0.6f // Weight for color features
     private val MIN_CONFIDENCE = 0.8f // Minimum confidence to consider a match
 
-    fun addUser(features: FloatArray, name: String) {
-        // Split features into shape (first 256) and color (remaining 64)
-        val shapeFeatures = features.copyOfRange(0, 256).normalize()
-        val colorFeatures = features.copyOfRange(256, features.size).normalize()
-        database[name] = Pair(shapeFeatures, colorFeatures)
+    init {
+        loadIrisImages()
     }
 
-    fun findBestMatch(features: FloatArray): Pair<String?, Float> {
-        if (database.isEmpty()) return Pair(null, 0f)
+    private fun loadIrisImages() {
+        try {
+            // List all files in assets directory
+            val files = context.assets.list("")?.filter {
+                it.endsWith(".jpg") || it.endsWith(".png")
+            } ?: emptyList()
 
-        // Split input features
-        val inputShape = features.copyOfRange(0, 256).normalize()
-        val inputColor = features.copyOfRange(256, features.size).normalize()
+            files.forEach { filename ->
+                // Extract name from filename (e.g., "Jack.jpg" -> "Jack")
+                val name = filename.substringBeforeLast('.')
 
+                // Load and process image
+                context.assets.open(filename).use { inputStream ->
+                    val bitmap = BitmapFactory.decodeStream(inputStream)
+                    val irisDetector = IrisDetector(context)
+
+                    irisDetector.detectIris(bitmap) { iris ->
+                        iris.leftIris?.let { irisData ->
+                            storedIrises.add(StoredIris(name, irisData.features))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Error loading iris images from assets")
+        }
+    }
+
+    fun findBestMatch(liveFeatures: FloatArray): Pair<String?, Float> {
+        if (storedIrises.isEmpty()) return Pair(null, 0f)
+
+        val normalizedLive = liveFeatures.normalize()
         var bestMatch: String? = null
         var highestSimilarity = 0f
 
-        database.forEach { (userId, dbFeatures) ->
-            val shapeSimilarity = cosineSimilarity(inputShape, dbFeatures.first)
-            val colorSimilarity = cosineSimilarity(inputColor, dbFeatures.second)
-
-            // Weighted combination of both similarities
-            val combinedSimilarity = (shapeSimilarity * SHAPE_WEIGHT) + (colorSimilarity * COLOR_WEIGHT)
-
-            if (combinedSimilarity > highestSimilarity && combinedSimilarity >= MIN_CONFIDENCE) {
-                highestSimilarity = combinedSimilarity
-                bestMatch = userId
+        storedIrises.forEach { stored ->
+            val similarity = cosineSimilarity(normalizedLive, stored.features.normalize())
+            if (similarity > highestSimilarity && similarity >= MIN_CONFIDENCE) {
+                highestSimilarity = similarity
+                bestMatch = stored.name
             }
         }
 
@@ -47,7 +68,7 @@ class IrisDatabase {
     }
 
     private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
-        require(a.size == b.size) { "Arrays must have same length" }
+        require(a.size == b.size) { "Feature vectors must have same length" }
         var dotProduct = 0f
         var normA = 0f
         var normB = 0f
