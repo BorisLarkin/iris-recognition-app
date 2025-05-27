@@ -223,9 +223,7 @@ class MainActivity : ComponentActivity() {
                 }
             } else {
                 irisPairs = emptyList()
-                if (recognize) {
-                    recognizedUser = null
-                }
+                recognizedUser = null
             }
 
             imageSize = currentImageSize
@@ -236,19 +234,6 @@ class MainActivity : ComponentActivity() {
                     if (frameCounter++ % 3 != 0) {
                         image.close()
                         return@withContext
-                    }
-
-                    currentRotation = image.imageInfo.rotationDegrees
-
-                    val rotationMatrix = Matrix().apply {
-                        when (currentRotation) {
-                            90 -> postRotate(90f)
-                            180 -> postRotate(180f)
-                            270 -> postRotate(270f)
-                        }
-                        if (isFrontCamera) {
-                            postScale(-1f, 1f)
-                        }
                     }
 
                     val bitmap = image.toBitmap(currentRotation, isFrontCamera)
@@ -432,7 +417,8 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 isScanning = showIrisResultDialog && irisDetectionResult == "Scanning iris...",
-                currentRotation = 0
+                currentRotation = currentRotation,
+                isFrontCamera = isFrontCamera
         )
 
         if (showIrisResultDialog) {
@@ -477,11 +463,12 @@ class MainActivity : ComponentActivity() {
         val bitmap = BitmapFactory.decodeByteArray(jpegArray, 0, jpegArray.size)
 
         val rotationMatrix = Matrix().apply {
-            // Correct rotation based on camera sensor orientation
-            when (rotationDegrees) {
-                90 -> postRotate(90f)
-                180 -> postRotate(180f)
-                270 -> postRotate(270f)
+            if (isFrontCamera) {
+                postRotate(-90f)
+                postScale(-1f, 1f)
+            }
+            else {
+                postRotate(90f)
             }
         }
 

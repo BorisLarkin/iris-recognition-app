@@ -70,10 +70,10 @@ class FaceDetector(context: Context) {
                 // Return absolute coordinates (no normalization)
                 Face(
                     org.opencv.core.Rect(
-                        (faceRect.x - faceRect.width * 0.2).toInt().coerceAtLeast(0),
-                        (faceRect.y - faceRect.height * 0.2).toInt().coerceAtLeast(0),
-                        (faceRect.width * 1.4).toInt().coerceAtMost(image.cols()),
-                        (faceRect.height * 1.4).toInt().coerceAtMost(image.rows())
+                        faceRect.x,
+                        faceRect.y,
+                        faceRect.width,
+                        faceRect.height
                     ),
                     emptyList()
                 )

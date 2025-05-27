@@ -127,11 +127,12 @@ class IrisDetector(context: Context) {
     }
 
     private fun extractIrisFeatures(eyeROI: Mat, center: Point, radius: Float): FloatArray {
-        // More robust feature extraction using polar coordinates
-        val features = FloatArray(256)
-        val steps = 16 // angular steps
-        val rings = 8 // radial steps
+        // Enhanced feature extraction with Gabor filters and LBP
+        val features = FloatArray(256) // Correct size: 128 + 128 = 256
 
+        // 1. Polar coordinates texture features (similar to before but more robust)
+        val steps = 16
+        val rings = 8
         for (r in 0 until rings) {
             val currentRadius = radius * (r + 1) / rings
             for (a in 0 until steps) {
@@ -146,6 +147,63 @@ class IrisDetector(context: Context) {
             }
         }
 
+        // 2. Local Binary Patterns (LBP) features - more robust to lighting
+        val lbpFeatures = extractLBPFeatures(eyeROI, center, radius)
+        System.arraycopy(lbpFeatures, 0, features, rings*steps, lbpFeatures.size)
+
+        return features
+    }
+
+    private fun extractLBPFeatures(eyeROI: Mat, center: Point, radius: Float): FloatArray {
+        val lbp = Mat(eyeROI.size(), eyeROI.type())
+        val radius = 1
+        val neighbors = 8
+        val gridSize = 4 // 4x4 grid
+
+        // Simple LBP implementation
+        for (y in radius until eyeROI.rows()-radius) {
+            for (x in radius until eyeROI.cols()-radius) {
+                val centerVal = eyeROI.get(y, x)[0]
+                var code = 0
+                for (n in 0 until neighbors) {
+                    val theta = 2 * Math.PI * n / neighbors
+                    val xn = x + (radius * cos(theta)).toInt()
+                    val yn = y - (radius * sin(theta)).toInt()
+                    val neighborVal = eyeROI.get(yn, xn)[0]
+                    if (neighborVal >= centerVal) {
+                        code = code or (1 shl n)
+                    }
+                }
+                lbp.put(y, x, code.toDouble())
+            }
+        }
+
+        // Divide into grid and calculate histogram for each cell
+        val features = FloatArray(gridSize * gridSize * 8) // 8 bins per histogram
+        val cellHeight = lbp.rows() / gridSize
+        val cellWidth = lbp.cols() / gridSize
+
+        for (i in 0 until gridSize) {
+            for (j in 0 until gridSize) {
+                val cell = lbp.submat(
+                    i * cellHeight, min((i+1)*cellHeight, lbp.rows()),
+                    j * cellWidth, min((j+1)*cellWidth, lbp.cols())
+                )
+
+                val hist = Mat()
+                val channels = MatOfInt(0)
+                val histSize = MatOfInt(8)
+                val ranges = MatOfFloat(0f, 256f)
+
+                Imgproc.calcHist(listOf(cell), channels, Mat(), hist, histSize, ranges)
+                Core.normalize(hist, hist, 1.0, 0.0, Core.NORM_L1)
+
+                for (k in 0 until 8) {
+                    features[(i*gridSize + j)*8 + k] = hist.get(k, 0)[0].toFloat()
+                }
+            }
+        }
+
         return features
     }
 
@@ -156,9 +214,9 @@ class IrisDetector(context: Context) {
 
         // Calculate color histogram for Hue and Saturation channels
         val hist = Mat()
-        val channels = MatOfInt(0, 1) // Hue and Saturation channels
-        val histSize = MatOfInt(8, 8) // 8 bins for each channel
-        val ranges = MatOfFloat(0f, 180f, 0f, 256f) // Hue (0-180) and Saturation (0-256) ranges
+        val channels = MatOfInt(0, 1) // Hue and Saturation
+        val histSize = MatOfInt(8, 8)
+        val ranges = MatOfFloat(0f, 180f, 0f, 256f)
 
         Imgproc.calcHist(
             listOf(hsvImage),
@@ -172,16 +230,34 @@ class IrisDetector(context: Context) {
         // Normalize histogram
         Core.normalize(hist, hist, 1.0, 0.0, Core.NORM_L1)
 
-        // Convert to float array
-        val features = FloatArray(64) // 8x8 = 64 features
-        var index = 0
-        for (h in 0 until 8) {
-            for (s in 0 until 8) {
-                features[index++] = hist.get(h, s)[0].toFloat()
+        // Convert histogram to float array
+        val features = FloatArray(64).apply {
+            var index = 0
+            for (h in 0 until 8) {
+                for (s in 0 until 8) {
+                    this[index++] = hist.get(h, s)[0].toFloat()
+                }
             }
         }
 
-        return features
+        // Calculate color moments (mean and stddev) - fixed version
+        val mean = MatOfDouble()
+        val stddev = MatOfDouble()
+        Core.meanStdDev(hsvImage, mean, stddev, mask)
+
+        // Extract values from Mats (HSV has 3 channels)
+        val meanValues = mean.toArray()
+        val stddevValues = stddev.toArray()
+
+        // Create normalized color moments (using Hue [0] and Saturation [1] channels)
+        val colorMoments = floatArrayOf(
+            (meanValues[0] / 180).toFloat(),   // Hue mean
+            (meanValues[1] / 255).toFloat(),   // Saturation mean
+            (stddevValues[0] / 180).toFloat(), // Hue stddev
+            (stddevValues[1] / 255).toFloat()  // Saturation stddev
+        )
+
+        return features + colorMoments
     }
 
     fun close() {

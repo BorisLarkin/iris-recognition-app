@@ -9,25 +9,29 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
 import com.example.irisrecognition.detection.models.Face
 import com.example.irisrecognition.detection.models.Iris
+import timber.log.Timber
+import kotlin.math.min
 
 @Composable
 fun DetectionOverlay(
     faces: List<Face>,
     irisPairs: List<Iris>,
     modifier: Modifier = Modifier,
-    imageWidth: Int,
-    imageHeight: Int,
+    imageWidth: Int,  // Bitmap width after rotation
+    imageHeight: Int, // Bitmap height after rotation
     isFrontCamera: Boolean = false
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
-        // Calculate aspect ratio preserving scale
+        // Get the actual preview viewport dimensions
+        val previewWidth = size.width
+        val previewHeight = size.height
+
         val imageAspect = imageWidth.toFloat() / imageHeight.toFloat()
         val canvasAspect = size.width / size.height
 
+        // Calculate the scale factor between bitmap and preview
         val scale: Float
         val offsetX: Float
         val offsetY: Float
@@ -44,12 +48,15 @@ fun DetectionOverlay(
             offsetY = (size.height - imageHeight * scale) / 2
         }
 
-        // Unified coordinate transform (no rotation needed)
+
+        // Simple transform that just scales and centers
         fun transformPoint(x: Float, y: Float): Offset {
             val screenX = x * scale + offsetX
             val screenY = y * scale + offsetY
-            return if (isFrontCamera) {
-                Offset(size.width - screenX, screenY) // Mirror only X for front camera
+            Timber.log(previewHeight.toInt(), "Height")
+            return if (!isFrontCamera) {
+                // Mirror only the X coordinate for front camera
+                Offset(previewWidth - screenX, previewHeight - screenY)
             } else {
                 Offset(screenX, screenY)
             }
@@ -75,29 +82,17 @@ fun DetectionOverlay(
         irisPairs.forEach { iris ->
             iris.leftIris?.let { irisData ->
                 val center = transformPoint(
-                    irisData.center.x.toFloat(),
+                    irisData.center.x.toFloat()-30,
                     irisData.center.y.toFloat()
-                ).let { original ->
-                    // Manual adjustments
-                    original.copy(
-                        y = original.y - 20f,  // Move up by 15 pixels
-                        x = original.x + 30f   // Move left by 10 pixels
-                    )
-                }
+                )
                 drawIrisCircle(center, irisData.radius * scale, Color.Red)
             }
 
             iris.rightIris?.let { irisData ->
                 val center = transformPoint(
-                    irisData.center.x.toFloat(),
+                    irisData.center.x.toFloat()+50,
                     irisData.center.y.toFloat()
-                ).let { original ->
-                    // Manual adjustments
-                    original.copy(
-                        y = original.y - 20f,  // Move up by 15 pixels
-                        x = original.x - 100f   // Move right by 10 pixels
-                    )
-                }
+                )
                 drawIrisCircle(center, irisData.radius * scale, Color.Blue)
             }
         }

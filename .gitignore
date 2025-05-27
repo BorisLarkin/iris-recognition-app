@@ -18,3 +18,7 @@ opencv/build/
 *.apk
 /app/src/main/assets/*.jpg
 *.jpg
+.idea
+.kotlin/
+gradle/
+opencv/

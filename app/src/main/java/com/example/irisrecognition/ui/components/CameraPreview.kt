@@ -38,7 +38,8 @@ fun CameraPreview(
     onSwitchCamera: () -> Unit,
     onCapture: () -> Unit,
     isScanning: Boolean,
-    currentRotation : Int
+    currentRotation : Int,
+    isFrontCamera : Boolean
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
@@ -63,7 +64,7 @@ fun CameraPreview(
             irisPairs = irisPairs,
             imageWidth = imageSize.width.toInt(),
             imageHeight = imageSize.height.toInt(),
-            isFrontCamera = cameraController.cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA
+            isFrontCamera = isFrontCamera
         )
 
         Column(
