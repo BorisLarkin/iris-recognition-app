@@ -64,7 +64,7 @@ class IrisDetector(context: Context) {
             val eyes = MatOfRect()
             eyeCascade?.detectMultiScale(
                 gray, eyes, 1.1, 3, 0,
-                Size(30.0, 30.0), Size(200.0, 200.0)
+                Size(20.0, 20.0), Size(300.0, 300.0)
             )
 
             val eyeRects = eyes.toList()
@@ -87,14 +87,30 @@ class IrisDetector(context: Context) {
                     1.2, eyeROI.rows() / 8.0, 100.0, 30.0, 10, 50
                 )
 
-                // Process detected circles
-                for (i in 0 until min(circles.cols(), 1)) { // Take only the most prominent circle per eye
-                    val circle = circles.get(0, i)
-                    // In IrisDetector.kt
+                val bestCircle = when {
+                    circles.cols() > 1 -> {
+                        // Find circle closest to center of eye region
+                        val eyeCenter = Point(eyeROI.cols() / 2.0, eyeROI.rows() / 2.0)
+                        val circlesList = mutableListOf<DoubleArray>()
+                        for (i in 0 until circles.cols()) {
+                            circlesList.add(circles.get(0, i))
+                        }
+                        circlesList.minByOrNull { circle ->
+                            val dx = circle[0] - eyeCenter.x
+                            val dy = circle[1] - eyeCenter.y
+                            val dist = sqrt(dx * dx + dy * dy)
+                            dist + circle[2] * 0.1 // Slightly prefer larger circles
+                        }
+                    }
+                    circles.cols() == 1 -> circles.get(0, 0)
+                    else -> null
+                }
+
+                bestCircle?.let { circle ->
                     val center = Point(
                         circle[0] + eyeRect.x, circle[1] + eyeRect.y
                     )
-                    val radius = circle[2].toFloat() // Normalize radius too
+                    val radius = circle[2].toFloat()
 
                     // Extract both shape and color features
                     val shapeFeatures = extractIrisFeatures(eyeROI, Point(circle[0], circle[1]), radius)
@@ -212,10 +228,10 @@ class IrisDetector(context: Context) {
         val mask = Mat.zeros(hsvImage.size(), CvType.CV_8UC1)
         Imgproc.circle(mask, center, radius.toInt(), Scalar(255.0), -1)
 
-        // Calculate color histogram for Hue and Saturation channels
+        // Calculate color histogram with more bins for Hue (which is more discriminative)
         val hist = Mat()
         val channels = MatOfInt(0, 1) // Hue and Saturation
-        val histSize = MatOfInt(8, 8)
+        val histSize = MatOfInt(16, 8) // More bins for Hue (16), fewer for Saturation (8)
         val ranges = MatOfFloat(0f, 180f, 0f, 256f)
 
         Imgproc.calcHist(
@@ -231,33 +247,64 @@ class IrisDetector(context: Context) {
         Core.normalize(hist, hist, 1.0, 0.0, Core.NORM_L1)
 
         // Convert histogram to float array
-        val features = FloatArray(64).apply {
+        val histogramFeatures = FloatArray(16 * 8).apply {
             var index = 0
-            for (h in 0 until 8) {
+            for (h in 0 until 16) {
                 for (s in 0 until 8) {
                     this[index++] = hist.get(h, s)[0].toFloat()
                 }
             }
         }
 
-        // Calculate color moments (mean and stddev) - fixed version
+        // Calculate more sophisticated color moments
         val mean = MatOfDouble()
         val stddev = MatOfDouble()
         Core.meanStdDev(hsvImage, mean, stddev, mask)
 
-        // Extract values from Mats (HSV has 3 channels)
         val meanValues = mean.toArray()
         val stddevValues = stddev.toArray()
 
-        // Create normalized color moments (using Hue [0] and Saturation [1] channels)
+        // Enhanced color moments - focus more on Hue which is more stable
         val colorMoments = floatArrayOf(
             (meanValues[0] / 180).toFloat(),   // Hue mean
-            (meanValues[1] / 255).toFloat(),   // Saturation mean
             (stddevValues[0] / 180).toFloat(), // Hue stddev
-            (stddevValues[1] / 255).toFloat()  // Saturation stddev
+            (meanValues[1] / 255).toFloat(),   // Saturation mean
+            (stddevValues[1] / 255).toFloat(), // Saturation stddev
+            (meanValues[2] / 255).toFloat(),   // Value mean (for completeness)
+            (stddevValues[2] / 255).toFloat()  // Value stddev
         )
 
-        return features + colorMoments
+        // Add color ratios between different regions of the iris
+        val regionFeatures = extractColorRegionFeatures(hsvImage, center, radius.toInt(), mask)
+
+        return histogramFeatures + colorMoments + regionFeatures
+    }
+
+    private fun extractColorRegionFeatures(hsvImage: Mat, center: Point, radius: Int, mask: Mat): FloatArray {
+        // Divide iris into inner and outer regions
+        val innerRadius = (radius * 0.6).toInt()
+        val outerRadius = radius
+
+        // Create masks for inner and outer regions
+        val innerMask = Mat.zeros(hsvImage.size(), CvType.CV_8UC1)
+        val outerMask = Mat.zeros(hsvImage.size(), CvType.CV_8UC1)
+
+        Imgproc.circle(innerMask, center, innerRadius, Scalar(255.0), -1)
+        Imgproc.circle(outerMask, center, outerRadius, Scalar(255.0), -1)
+        Core.subtract(outerMask, innerMask, outerMask)
+
+        // Calculate mean color for each region
+        val innerMean = Core.mean(hsvImage, innerMask)
+        val outerMean = Core.mean(hsvImage, outerMask)
+
+        // Calculate ratios between regions (focus on Hue channel)
+        val hueRatio = if (outerMean.`val`[0] != 0.0) innerMean.`val`[0] / outerMean.`val`[0] else 1.0
+        val saturationRatio = if (outerMean.`val`[1] != 0.0) innerMean.`val`[1] / outerMean.`val`[1] else 1.0
+
+        return floatArrayOf(
+            hueRatio.toFloat(),
+            saturationRatio.toFloat()
+        )
     }
 
     fun close() {

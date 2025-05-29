@@ -3,6 +3,7 @@ import android.graphics.BitmapFactory
 import com.example.irisrecognition.detection.IrisDetector
 import com.example.irisrecognition.detection.models.StoredIris
 import timber.log.Timber
+import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -75,9 +76,9 @@ class IrisDatabase(private val context: Context) {
             )
 
             // Calculate separate similarities
-            val colorSim = cosineSimilarity(liveColorFeatures.normalize(), storedColorFeatures.normalize())
+            val colorSim = 1 - histogramDistance(liveColorFeatures.normalize(), storedColorFeatures.normalize())
             val textureSim = cosineSimilarity(liveTextureFeatures.normalize(), storedTextureFeatures.normalize())
-            val shapeSim = cosineSimilarity(liveShapeFeatures.normalize(), storedShapeFeatures.normalize())
+            val shapeSim = euclideanSimilarity(liveShapeFeatures.normalize(), storedShapeFeatures.normalize())
 
             // Weighted combination
             val similarity = (colorSim * COLOR_WEIGHT +
@@ -99,6 +100,27 @@ class IrisDatabase(private val context: Context) {
     private fun FloatArray.normalize(): FloatArray {
         val norm = sqrt(this.sumOf { it.toDouble().pow(2) }.toFloat())
         return if (norm > 0) this.map { it / norm }.toFloatArray() else this
+    }
+
+    private fun histogramDistance(a: FloatArray, b: FloatArray): Float {
+        // Simplified Earth Mover's Distance approximation
+        var distance = 0f
+        var cumulativeDiff = 0f
+        for (i in a.indices) {
+            cumulativeDiff += a[i] - b[i]
+            distance += abs(cumulativeDiff)
+        }
+        return distance / a.size
+    }
+
+    private fun euclideanSimilarity(a: FloatArray, b: FloatArray): Float {
+        var sum = 0f
+        for (i in a.indices) {
+            sum += (a[i] - b[i]) * (a[i] - b[i])
+        }
+        val distance = sqrt(sum)
+        // Convert distance to similarity (assuming normalized vectors)
+        return 1 / (1 + distance)
     }
 
     private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
@@ -124,6 +146,6 @@ class IrisDatabase(private val context: Context) {
     private val COLOR_WEIGHT = 0.45f
     private val TEXTURE_WEIGHT = 0.45f
     private val SHAPE_WEIGHT = 0.10f
-    private val MIN_CONFIDENCE = 0.8f
-    private val COLOR_SIM_THRESHOLD = 0.6f
+    private val MIN_CONFIDENCE = 0.65f
+    private val COLOR_SIM_THRESHOLD = 0.65f
 }
