@@ -21,4 +21,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "IrisRecognitionApp"
 include(":app")
-include(":opencv")

@@ -83,6 +83,6 @@ dependencies {
 
     implementation(libs.timber)
 
-    implementation(project(":opencv"))
+    implementation("org.opencv:opencv:4.9.0")
 
 }

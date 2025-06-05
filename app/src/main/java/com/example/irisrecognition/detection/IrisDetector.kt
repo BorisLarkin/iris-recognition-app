@@ -230,9 +230,9 @@ class IrisDetector(context: Context) {
 
         // Calculate color histogram with more bins for Hue (which is more discriminative)
         val hist = Mat()
-        val channels = MatOfInt(0, 1) // Hue and Saturation
-        val histSize = MatOfInt(16, 8) // More bins for Hue (16), fewer for Saturation (8)
-        val ranges = MatOfFloat(0f, 180f, 0f, 256f)
+        val channels = MatOfInt(0) // Only Hue channel for better discrimination
+        val histSize = MatOfInt(16) // 16 bins for Hue
+        val ranges = MatOfFloat(0f, 180f)
 
         Imgproc.calcHist(
             listOf(hsvImage),
@@ -247,16 +247,13 @@ class IrisDetector(context: Context) {
         Core.normalize(hist, hist, 1.0, 0.0, Core.NORM_L1)
 
         // Convert histogram to float array
-        val histogramFeatures = FloatArray(16 * 8).apply {
-            var index = 0
+        val histogramFeatures = FloatArray(16).apply {
             for (h in 0 until 16) {
-                for (s in 0 until 8) {
-                    this[index++] = hist.get(h, s)[0].toFloat()
-                }
+                this[h] = hist.get(h, 0)[0].toFloat()
             }
         }
 
-        // Calculate more sophisticated color moments
+        // Calculate color moments (only Hue for better discrimination)
         val mean = MatOfDouble()
         val stddev = MatOfDouble()
         Core.meanStdDev(hsvImage, mean, stddev, mask)
@@ -264,21 +261,15 @@ class IrisDetector(context: Context) {
         val meanValues = mean.toArray()
         val stddevValues = stddev.toArray()
 
-        // Enhanced color moments - focus more on Hue which is more stable
+        // Focus only on Hue channel
         val colorMoments = floatArrayOf(
             (meanValues[0] / 180).toFloat(),   // Hue mean
-            (stddevValues[0] / 180).toFloat(), // Hue stddev
-            (meanValues[1] / 255).toFloat(),   // Saturation mean
-            (stddevValues[1] / 255).toFloat(), // Saturation stddev
-            (meanValues[2] / 255).toFloat(),   // Value mean (for completeness)
-            (stddevValues[2] / 255).toFloat()  // Value stddev
+            (stddevValues[0] / 180).toFloat()   // Hue stddev
         )
 
-        // Add color ratios between different regions of the iris
-        val regionFeatures = extractColorRegionFeatures(hsvImage, center, radius.toInt(), mask)
-
-        return histogramFeatures + colorMoments + regionFeatures
+        return histogramFeatures + colorMoments
     }
+
 
     private fun extractColorRegionFeatures(hsvImage: Mat, center: Point, radius: Int, mask: Mat): FloatArray {
         // Divide iris into inner and outer regions

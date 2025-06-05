@@ -45,16 +45,16 @@ class IrisDatabase(private val context: Context) {
     fun findBestMatch(liveFeatures: FloatArray): Pair<String?, Float> {
         if (storedIrises.isEmpty()) return Pair(null, 0f)
 
-        val normalizedLive = liveFeatures.normalize()
         var bestMatch: String? = null
         var highestSimilarity = 0f
-        // Total features = 256 (shape) + 68 (color) = 324
-        val colorFeatureLength = 68
+
+        // Updated feature sizes
+        val colorFeatureLength = 18  // 16 (Hue histogram) + 2 (Hue moments)
         val textureFeatureLength = 128 // LBP portion
         val shapeFeatureLength = 128 // Polar coordinates portion
 
         storedIrises.forEach { stored ->
-            // Split features into different types (assuming known structure)
+            // Split features into different types
             val liveColorFeatures = liveFeatures.copyOfRange(
                 256, 256 + colorFeatureLength
             )
@@ -75,10 +75,21 @@ class IrisDatabase(private val context: Context) {
                 0, shapeFeatureLength
             )
 
-            // Calculate separate similarities
-            val colorSim = 1 - histogramDistance(liveColorFeatures.normalize(), storedColorFeatures.normalize())
-            val textureSim = cosineSimilarity(liveTextureFeatures.normalize(), storedTextureFeatures.normalize())
-            val shapeSim = euclideanSimilarity(liveShapeFeatures.normalize(), storedShapeFeatures.normalize())
+            // Calculate similarities with proper normalization
+            val colorSim = 1 - histogramDistance(
+                liveColorFeatures.take(16).toFloatArray(),  // Histogram part
+                storedColorFeatures.take(16).toFloatArray()
+            )
+
+            val textureSim = cosineSimilarity(
+                liveTextureFeatures.normalize(),
+                storedTextureFeatures.normalize()
+            )
+
+            val shapeSim = euclideanSimilarity(
+                liveShapeFeatures.normalize(),
+                storedShapeFeatures.normalize()
+            )
 
             // Weighted combination
             val similarity = (colorSim * COLOR_WEIGHT +
@@ -86,11 +97,8 @@ class IrisDatabase(private val context: Context) {
                     shapeSim * SHAPE_WEIGHT)
 
             if (similarity > highestSimilarity && similarity >= MIN_CONFIDENCE) {
-                // Additional verification - check color similarity is above threshold
-                if (colorSim > COLOR_SIM_THRESHOLD) {
-                    highestSimilarity = similarity
-                    bestMatch = stored.name
-                }
+                highestSimilarity = similarity
+                bestMatch = stored.name
             }
         }
 
@@ -103,15 +111,16 @@ class IrisDatabase(private val context: Context) {
     }
 
     private fun histogramDistance(a: FloatArray, b: FloatArray): Float {
-        // Simplified Earth Mover's Distance approximation
+        // Proper Earth Mover's Distance approximation for normalized histograms
+        require(a.size == b.size) { "Histograms must be of equal size" }
+
         var distance = 0f
-        var cumulativeDiff = 0f
         for (i in a.indices) {
-            cumulativeDiff += a[i] - b[i]
-            distance += abs(cumulativeDiff)
+            distance += abs(a[i] - b[i])
         }
-        return distance / a.size
+        return abs(distance / 2f)  // Normalize to [0,1] range
     }
+
 
     private fun euclideanSimilarity(a: FloatArray, b: FloatArray): Float {
         var sum = 0f
@@ -143,9 +152,9 @@ class IrisDatabase(private val context: Context) {
     }
 
     // Adjust weights and thresholds
-    private val COLOR_WEIGHT = 0.45f
-    private val TEXTURE_WEIGHT = 0.45f
+    private val COLOR_WEIGHT = 0.4f
+    private val TEXTURE_WEIGHT = 0.5f
     private val SHAPE_WEIGHT = 0.10f
-    private val MIN_CONFIDENCE = 0.65f
-    private val COLOR_SIM_THRESHOLD = 0.65f
+    private val MIN_CONFIDENCE = 0.6f
+    private val COLOR_SIM_THRESHOLD = 0.6f
 }
